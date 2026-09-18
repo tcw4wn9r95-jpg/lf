@@ -362,7 +362,14 @@ function defaultsPanel(data) {
       })),
       field('Net margin %', bind(input({ type: 'number', inputmode: 'decimal', step: '1', value: toPercentInput(s.targetMargin) }), (set, v) => {
         set.targetMargin = toFraction(v);
-      })),
+      }), 'Only when pricing from margin'),
+    ),
+    field(
+      'Margin floor %',
+      bind(input({ type: 'number', inputmode: 'decimal', step: '1', value: toPercentInput(s.minMargin) }), (set, v) => {
+        set.minMargin = toFraction(v);
+      }),
+      'A quotation below this is flagged before it goes out',
     ),
     field(
       'Price from',

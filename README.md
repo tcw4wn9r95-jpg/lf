@@ -28,11 +28,20 @@ the offline cache (service workers need `http(s)`).
 ## What it does
 
 ### Quotations
-Pick products, set quantities, and the price builds itself from your landed unit
-cost and a target net margin — or a markup on cost, the RRP, or a price you type.
-Change VAT, apply a discount to the whole quote or to one line, and the panel
-underneath keeps showing what you actually earn. A 10% club discount on a 45%
-margin quote shows up immediately as 37%, and any line pushed below cost goes red.
+Every line starts at the product's own retail price — *precio normal* — and you
+discount down from there, on the whole quote or one line at a time. The landed
+cost behind each product turns that into a straight answer:
+
+> **You can do this.** 39.6% margin, clear of your 30% floor. £68.29 on the order.
+
+Push it further and it says so — *Tight, but not a loss* under your margin floor,
+*Do not send this* once the order is underwater — and names the lines that caused
+it. Each row shows £97.00 → £72.75 · 25% off · 46% margin, with a **thin** or
+**below cost** tag. Open a line and it tells you the most you can give away:
+*43% at your 30% floor, break-even at 60%.*
+
+The floor lives in Settings. Pricing from a target margin, a markup on cost, or a
+price you type by hand is still there in the dropdown.
 
 Export produces an A4 PDF: the logo lockup, your company and VAT details, the client,
 the line table, totals and terms, in the brand's black-and-white editorial style.

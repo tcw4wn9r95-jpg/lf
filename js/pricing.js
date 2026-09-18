@@ -39,7 +39,10 @@ export function baseUnitPrice({ mode, cost = 0, margin = 0, markup = 0, rrp = 0,
     case 'markup':
       return cost * (1 + markup);
     case 'rrp':
-      return rrp / (1 + vatRate);
+      // Three products have no RRP in the model yet; fall back to margin pricing
+      // rather than quoting them at zero.
+      if (rrp > 0) return rrp / (1 + vatRate);
+      return margin >= 0.999 ? cost * 1000 : cost / (1 - margin);
     case 'fixed':
       return fixed;
     case 'margin':
@@ -134,13 +137,35 @@ export function priceQuote(quote) {
   };
 }
 
+/**
+ * The largest discount off `listUnit` that still leaves `targetMargin`.
+ * With targetMargin 0 this is the break-even point: one penny more and the line
+ * is sold below what it cost to land.
+ */
+export function maxDiscountForMargin(listUnit, cost, targetMargin = 0, commissionRate = 0) {
+  if (!listUnit) return 0;
+  const denominator = 1 - clampFraction(commissionRate) - clampFraction(targetMargin);
+  if (denominator <= 0) return 0;
+  const minimumNet = cost / denominator;
+  return Math.max(0, 1 - minimumNet / listUnit);
+}
+
 /** The discount that takes a line to exactly zero profit — the floor to quote against. */
 export function breakEvenDiscount(listUnit, cost, commissionRate = 0) {
-  if (!listUnit) return 0;
-  const keptShare = 1 - clampFraction(commissionRate);
-  const floor = keptShare > 0 ? cost / keptShare : cost;
-  return Math.max(0, 1 - floor / listUnit);
+  return maxDiscountForMargin(listUnit, cost, 0, commissionRate);
 }
+
+/**
+ * Turn a margin into a go/no-go call against the floor set in Settings.
+ * 'loss' is money out of the door; 'thin' clears cost but misses the floor.
+ */
+export function marginVerdict(margin, minMargin = 0, profit = 0) {
+  if (profit < 0 || margin < 0) return 'loss';
+  if (minMargin > 0 && margin < minMargin) return 'thin';
+  return 'ok';
+}
+
+export const VERDICT_TONE = { ok: 'good', thin: 'due', loss: 'alert' };
 
 function num(v) {
   const n = typeof v === 'string' ? parseFloat(v) : v;

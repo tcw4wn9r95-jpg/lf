@@ -2,11 +2,14 @@
 
 import { CATEGORIES, displayName } from '../catalog.js';
 import { load, products, saveQuote, deleteQuote, nextQuoteRef, uid, saveSale } from '../store.js';
-import { priceQuote, PRICING_MODES, ROUNDING, breakEvenDiscount } from '../pricing.js';
+import {
+  priceQuote, PRICING_MODES, ROUNDING, breakEvenDiscount, maxDiscountForMargin,
+  marginVerdict, VERDICT_TONE,
+} from '../pricing.js';
 import { buildQuotePdf, quoteFilename } from '../pdf.js';
 import { loadBrandFonts } from '../fonts.js';
 import {
-  el, card, sectionTitle, empty, button, input, select, field, sheet, closeSheet, toast,
+  el, card, sectionTitle, empty, button, input, select, field, sheet, closeSheet, toast, pill,
   currency, percent, toFraction, toPercentInput, todayIso, addDays, confirmSheet, downloadBlob,
 } from '../ui.js';
 
@@ -41,6 +44,8 @@ function list(navigate) {
   const listEl = el('div', { class: 'list' });
   data.quotes.forEach((q) => {
     const totals = priceQuote(q);
+    const floor = q.minMargin ?? data.settings.minMargin;
+    const verdict = marginVerdict(totals.margin, floor, totals.profit);
     listEl.appendChild(
       el(
         'button',
@@ -55,7 +60,11 @@ function list(navigate) {
           'div',
           { class: 'row-end' },
           el('div', { class: 'row-value' }, currency(totals.total, { code: q.currency })),
-          el('div', { class: 'row-value-sub' }, `${percent(totals.margin)} margin`),
+          el(
+            'div',
+            { class: `row-value-sub ${verdict === 'ok' ? '' : `text-${VERDICT_TONE[verdict]}`}` },
+            `${percent(totals.margin)} margin`,
+          ),
         ),
       ),
     );
@@ -82,6 +91,7 @@ function blankQuote() {
     mode: settings.mode,
     targetMargin: settings.targetMargin,
     markup: settings.markup,
+    minMargin: settings.minMargin,
     discount: 0,
     rounding: settings.rounding,
     commissionRate: settings.commissionRate,
@@ -235,14 +245,19 @@ function pricingPanel(quote, onChange) {
   const markupInput = input({ type: 'number', step: '5', inputmode: 'decimal', value: toPercentInput(quote.markup) });
   const vatInput = input({ type: 'number', step: '1', inputmode: 'decimal', value: toPercentInput(quote.vatRate) });
   const discountInput = input({ type: 'number', step: '1', inputmode: 'decimal', value: toPercentInput(quote.discount) });
+  const floorInput = input({ type: 'number', step: '1', inputmode: 'decimal', value: toPercentInput(quote.minMargin) });
   const roundingSelect = select(ROUNDING.map((r) => ({ value: r.value, label: r.label })), { value: quote.rounding });
 
   const marginField = field('Net margin %', marginInput, 'Share of the sale price kept');
   const markupField = field('Markup %', markupInput, 'Added on top of cost');
+  const roundingField = field('Round prices to', roundingSelect);
 
   const syncModeFields = () => {
+    // Pricing from retail means the price is already set; margin, markup and
+    // rounding would only get in the way.
     marginField.style.display = quote.mode === 'margin' ? '' : 'none';
     markupField.style.display = quote.mode === 'markup' ? '' : 'none';
+    roundingField.style.display = quote.mode === 'rrp' ? 'none' : '';
   };
 
   modeSelect.addEventListener('change', () => {
@@ -264,6 +279,10 @@ function pricingPanel(quote, onChange) {
   });
   discountInput.addEventListener('input', () => {
     quote.discount = toFraction(discountInput.value);
+    onChange();
+  });
+  floorInput.addEventListener('input', () => {
+    quote.minMargin = toFraction(floorInput.value);
     onChange();
   });
   roundingSelect.addEventListener('change', () => {
@@ -298,12 +317,18 @@ function pricingPanel(quote, onChange) {
   syncModeFields();
 
   return card(
-    field('Price from', modeSelect),
+    field('Start from', modeSelect, 'Retail is each product\u2019s own RRP'),
     marginField,
     markupField,
-    el('div', { class: 'field-grid' }, field('VAT %', vatInput), field('Discount %', discountInput)),
+    field('Discount off retail %', discountInput, 'Applies to every line'),
     presets,
-    field('Round prices to', roundingSelect),
+    el(
+      'div',
+      { class: 'field-grid' },
+      field('VAT %', vatInput),
+      field('Margin floor %', floorInput, 'Flags anything below'),
+    ),
+    roundingField,
   );
 }
 
@@ -313,7 +338,10 @@ function linesPanel(quote, onChange) {
   const totals = priceQuote(quote);
   const box = el('div', { class: 'list' });
 
+  const floor = quote.minMargin ?? load().settings.minMargin;
+
   totals.lines.forEach((line, index) => {
+    const verdict = marginVerdict(line.margin, floor, line.profit);
     const qtyInput = input({
       class: 'input qty',
       type: 'number',
@@ -343,10 +371,17 @@ function linesPanel(quote, onChange) {
           el('div', { class: 'row-title' }, line.name),
           el(
             'div',
-            { class: `row-sub ${line.profit < 0 ? 'text-alert' : ''}` },
-            `${currency(line.netUnit, { code: quote.currency })} each · ${percent(line.margin)} margin${
-              line.discountApplied > 0.0001 ? ` · ${percent(line.discountApplied)} off` : ''
-            }`,
+            { class: `row-sub ${verdict === 'ok' ? '' : `text-${VERDICT_TONE[verdict]}`}` },
+            [
+              // Show the journey from list to quoted price, so the discount is legible.
+              line.discountApplied > 0.0001
+                ? `${currency(line.listUnit, { code: quote.currency })} → ${currency(line.netUnit, { code: quote.currency })}`
+                : `${currency(line.netUnit, { code: quote.currency })} each`,
+              line.discountApplied > 0.0001 ? `${percent(line.discountApplied)} off` : null,
+              `${percent(line.margin)} margin`,
+            ]
+              .filter(Boolean)
+              .join(' · '),
           ),
         ),
         qtyInput,
@@ -354,6 +389,7 @@ function linesPanel(quote, onChange) {
           'div',
           { class: 'row-end' },
           el('div', { class: 'row-value' }, currency(line.netTotal, { code: quote.currency })),
+          verdict !== 'ok' ? pill(verdict === 'loss' ? 'below cost' : 'thin', VERDICT_TONE[verdict]) : null,
         ),
       ),
     );
@@ -365,7 +401,10 @@ function linesPanel(quote, onChange) {
 function totalsPanel(quote) {
   const t = priceQuote(quote);
   const code = quote.currency;
-  const thin = t.margin < 0.2;
+  const floor = quote.minMargin ?? load().settings.minMargin;
+  const verdict = marginVerdict(t.margin, floor, t.profit);
+  const losers = t.lines.filter((l) => l.profit < 0);
+  const thinLines = t.lines.filter((l) => l.profit >= 0 && floor > 0 && l.margin < floor);
 
   const table = el('table', { class: 'ledger' });
   const tbody = el('tbody');
@@ -401,19 +440,36 @@ function totalsPanel(quote) {
   );
   detail.appendChild(dbody);
 
+  const headline = { ok: 'You can do this', thin: 'Tight, but not a loss', loss: 'Do not send this' }[verdict];
+  const reason = {
+    ok: `${percent(t.margin, 1)} margin, clear of your ${percent(floor)} floor. ${currency(t.profit, { code })} on the order.`,
+    thin: `${percent(t.margin, 1)} margin is under your ${percent(floor)} floor. Still ${currency(t.profit, { code })} on the order.`,
+    loss: `${percent(t.margin, 1)} margin — this order loses ${currency(Math.abs(t.profit), { code })}.`,
+  }[verdict];
+
+  const callouts = [];
+  if (losers.length) callouts.push(`Below cost: ${losers.map((l) => l.name).join(', ')}.`);
+  if (thinLines.length) callouts.push(`Under the floor: ${thinLines.map((l) => l.name).join(', ')}.`);
+
   return card(
+    t.units
+      ? el(
+          'div',
+          { class: `verdict verdict-${verdict}` },
+          el('div', { class: 'verdict-head' }, headline),
+          el('div', { class: 'verdict-body' }, reason),
+          ...callouts.map((text) => el('div', { class: 'verdict-detail' }, text)),
+        )
+      : null,
     table,
     el('hr', { class: 'divider' }),
     detail,
-    el('div', { class: `margin-bar ${thin ? 'is-alert' : ''}` }, el('span', { style: { width: `${Math.max(0, Math.min(1, t.margin)) * 100}%` } })),
     el(
-      'p',
-      { class: `inline-note ${t.profit < 0 ? 'text-alert' : ''}` },
-      `${percent(t.margin, 1)} net margin · ${percent(t.markupOnCost, 0)} on cost`,
+      'div',
+      { class: `margin-bar ${verdict === 'loss' ? 'is-alert' : ''}` },
+      el('span', { style: { width: `${Math.max(0, Math.min(1, t.margin)) * 100}%` } }),
     ),
-    t.lines.some((l) => l.profit < 0)
-      ? el('p', { class: 'inline-note text-alert' }, 'Some lines are below cost — check the discounts.')
-      : null,
+    el('p', { class: 'inline-note' }, `${percent(t.margin, 1)} net margin · ${percent(t.markupOnCost, 0)} on cost`),
   );
 }
 
@@ -619,21 +675,66 @@ function editLine(quote, index, onChange) {
     placeholder: `${priced.listUnit.toFixed(2)} (calculated)`,
   });
 
-  const floor = breakEvenDiscount(priced.listUnit, line.cost, quote.commissionRate);
+  const minMargin = quote.minMargin ?? load().settings.minMargin;
+  const breakEven = breakEvenDiscount(priced.listUnit, line.cost, quote.commissionRate);
+  const atFloor = maxDiscountForMargin(priced.listUnit, line.cost, minMargin, quote.commissionRate);
+  const verdict = marginVerdict(priced.margin, minMargin, priced.profit);
 
   sheet(
     line.name,
     el(
       'div',
       {},
+      el(
+        'div',
+        { class: `verdict verdict-${verdict}` },
+        el(
+          'div',
+          { class: 'verdict-head' },
+          verdict === 'loss' ? 'Below cost' : verdict === 'thin' ? 'Under your floor' : 'Fine as it stands',
+        ),
+        el(
+          'div',
+          { class: 'verdict-body' },
+          `${currency(priced.netUnit, { code: quote.currency })} each leaves ${currency(priced.profit / (priced.qty || 1), {
+            code: quote.currency,
+          })} a unit at ${percent(priced.margin)}.`,
+        ),
+      ),
       el('div', { class: 'field-grid' }, field('Quantity', qty), field('Line discount %', discount)),
+      el(
+        'table',
+        { class: 'ledger' },
+        el(
+          'tbody',
+          {},
+          el(
+            'tr',
+            {},
+            el('td', {}, `Most you can give at ${percent(minMargin)} margin`),
+            el('td', {}, percent(atFloor)),
+          ),
+          el('tr', {}, el('td', {}, 'Break-even discount'), el('td', {}, percent(breakEven))),
+          el(
+            'tr',
+            {},
+            el('td', {}, 'List price before discount'),
+            el('td', {}, currency(priced.listUnit, { code: quote.currency })),
+          ),
+          el('tr', {}, el('td', {}, 'Landed cost'), el('td', {}, currency(line.cost, { code: quote.currency }))),
+        ),
+      ),
       el(
         'p',
         { class: 'inline-note' },
-        `Break-even at ${percent(floor)} off this line's ${currency(priced.listUnit, { code: quote.currency })} list price.`,
+        `A quote-wide discount of ${percent(quote.discount)} is already applied on top of anything set here.`,
       ),
       field('Unit cost', cost, 'Only changes this quotation'),
-      field('Fixed unit price', override, 'Leave blank to price from margin'),
+      field(
+        'Fixed unit price',
+        override,
+        quote.mode === 'rrp' ? 'Leave blank to price from retail' : 'Leave blank to price from margin',
+      ),
       field('Spec line', spec, 'Printed under the item name'),
     ),
     {
