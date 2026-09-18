@@ -611,7 +611,7 @@ function buildCustom(base, existing = null) {
         `${currency(priced.profit)} a unit at ${percent(priced.margin, 1)} margin` +
           (priced.margin < settings.minMargin ? ` — under your ${percent(settings.minMargin)} floor` : ''),
       ),
-      el('p', { class: 'inline-note' }, 'The quotation shows only the price including VAT. None of this breakdown reaches the customer.'),
+      el('p', { class: 'inline-note' }, 'The quotation shows only the price, on whichever VAT basis it is set to. None of this breakdown reaches the customer.'),
     );
   };
 

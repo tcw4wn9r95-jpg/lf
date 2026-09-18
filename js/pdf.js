@@ -12,7 +12,7 @@
 
 import { LOCKUP_PNG, LOCKUP_ASPECT } from '../assets/brand-marks.js';
 import { registerPdfFonts } from './fonts.js';
-import { priceQuote } from './pricing.js';
+import { priceQuote, suggestedVatNote } from './pricing.js';
 import { fmtDate } from './deadlines.js';
 
 /* A4 in points. */
@@ -56,7 +56,7 @@ export function buildQuotePdf({ quote, company, settings }) {
   let y = masthead(doc, quote, company);
   y = parties(doc, y, quote, company);
   y = lineTable(doc, y, totals, cur, quote);
-  const totalsGeom = totalsBlock(doc, y, totals, cur, quote);
+  const totalsGeom = totalsBlock(doc, y, totals, cur, quote, company);
   // Terms tuck into the empty column beside the totals when they fit there.
   terms(doc, totalsGeom, quote, settings);
   footers(doc, company);
@@ -170,16 +170,19 @@ function lineTable(doc, y, totals, cur, quote) {
   const showDiscount = totals.lines.some((l) => l.discountApplied > 0.0001);
   const c = columns(showDiscount);
 
-  y = tableHead(doc, y, c);
+  y = tableHead(doc, y, c, quote);
 
   totals.lines.forEach((line) => {
     const nameLines = doc.splitTextToSize(line.name || 'Item', c.itemW);
     const metaBits = [line.code, line.spec].filter(Boolean).join('  ·  ');
-    const rowH = nameLines.length * 11.5 + (metaBits ? 9.5 : 0) + 11;
+    // The second VAT basis needs a line of its own on the right, so the row has to
+    // clear both that and whatever the item name takes on the left.
+    const rowH =
+      Math.max(nameLines.length * 11.5 + (metaBits ? 9.5 : 0), 11.5 + (showsBoth(quote) ? 9.5 : 0)) + 11;
 
     if (y + rowH > PAGE.h - M.bottom - 30) {
       doc.addPage();
-      y = tableHead(doc, continuationHead(doc, quote), c);
+      y = tableHead(doc, continuationHead(doc, quote), c, quote);
     }
 
     const baseline = y + 10;
@@ -193,7 +196,7 @@ function lineTable(doc, y, totals, cur, quote) {
 
     setType(doc, 9.5, 'normal', INK);
     doc.text(String(line.qty), c.qty, baseline, { align: 'right' });
-    doc.text(money(line.unitGross, cur), c.unit, baseline, { align: 'right' });
+    doc.text(money(primary(line, 'unit', quote), cur), c.unit, baseline, { align: 'right' });
     if (c.showDiscount) {
       setType(doc, 9.5, 'normal', line.discountApplied > 0.0001 ? INK : MUTED);
       doc.text(line.discountApplied > 0.0001 ? pct(line.discountApplied, 0) : '—', c.disc, baseline, {
@@ -201,7 +204,15 @@ function lineTable(doc, y, totals, cur, quote) {
       });
     }
     setType(doc, 9.5, 'normal', INK);
-    doc.text(money(line.grossTotal, cur), c.amount, baseline, { align: 'right' });
+    doc.text(money(primary(line, 'total', quote), cur), c.amount, baseline, { align: 'right' });
+
+    // In "both" mode the second basis rides under the figures, quietly.
+    if (showsBoth(quote)) {
+      setType(doc, 7.5, 'normal', MUTED);
+      const sub = baseline + 9.5;
+      doc.text(money(line.unitGross, cur), c.unit, sub, { align: 'right' });
+      doc.text(money(line.grossTotal, cur), c.amount, sub, { align: 'right' });
+    }
 
     y += rowH;
     rule(doc, y - 6, RULE, 0.4);
@@ -222,26 +233,32 @@ function continuationHead(doc, quote) {
   return y + 24;
 }
 
-function tableHead(doc, y, c) {
+function tableHead(doc, y, c, quote) {
   setType(doc, 7, 'bold', MUTED);
   doc.text('ITEM', c.item, y);
   doc.text('QTY', c.qty, y, { align: 'right' });
-  doc.text('UNIT', c.unit, y, { align: 'right' });
+  const basis = quote && quote.vatRate && quote.priceDisplay !== 'incl' ? ' EXCL. VAT' : '';
+  doc.text(`UNIT${basis}`, c.unit, y, { align: 'right' });
   if (c.showDiscount) doc.text('DISC', c.disc, y, { align: 'right' });
-  doc.text('AMOUNT', c.amount, y, { align: 'right' });
+  doc.text(`AMOUNT${basis}`, c.amount, y, { align: 'right' });
   rule(doc, y + 8, RULE_STRONG, 0.8);
   return y + 16;
 }
 
-function totalsBlock(doc, y, totals, cur, quote) {
+function totalsBlock(doc, y, totals, cur, quote, company) {
   const blockW = 232;
   const x = M.left + CONTENT_W;
   const labelX = x - blockW;
 
   // Reserve exactly what this block needs, so a quote only spills onto a second
   // page when it genuinely has to.
-  const rowCount = totals.discountValue > 0.004 ? 4 : 2;
-  const blockH = rowCount * 15 + 62;
+  const rowCount = (totals.discountValue > 0.004 ? 2 : 0) + (totals.vatRate ? 2 : 0);
+  // The VAT note is measured, not guessed: a three-line note must not be what
+  // pushes the totals onto a page of their own.
+  const note = quote.vatNote || suggestedVatNote(totals.vatRate, company);
+  setType(doc, 7, 'normal', MUTED);
+  const noteLines = note ? doc.splitTextToSize(String(note), blockW) : [];
+  const blockH = rowCount * 15 + 62 + (noteLines.length ? 14 + noteLines.length * 9 : 0);
   if (y + blockH > PAGE.h - M.bottom - 10) {
     doc.addPage();
     y = continuationHead(doc, quote);
@@ -252,11 +269,19 @@ function totalsBlock(doc, y, totals, cur, quote) {
   // called out inside the total so the quote still reads as a VAT document.
   const rows = [];
   if (totals.discountValue > 0.004) {
-    rows.push(['Retail value', money(totals.listGrossSubtotal, cur)]);
-    rows.push(['Discount', `-${money(totals.discountValue, cur)}`]);
+    // The retail line follows the basis the table is written in, so the column
+    // reads straight down: retail less discount is the net, plus VAT is the total.
+    const exVat = Boolean(totals.vatRate) && (quote.priceDisplay || 'both') !== 'incl';
+    const listNet = Math.round((totals.listGrossSubtotal / (1 + totals.vatRate)) * 100) / 100;
+    const list = exVat ? listNet : totals.listGrossSubtotal;
+    const off = exVat ? Math.round((listNet - totals.subtotal) * 100) / 100 : totals.discountValue;
+    rows.push([exVat ? 'Retail value excl. VAT' : 'Retail value', money(list, cur)]);
+    rows.push(['Discount', `-${money(off, cur)}`]);
   }
-  rows.push(['Net of VAT', money(totals.subtotal, cur)]);
-  rows.push([`VAT at ${pct(totals.vatRate, 0)}`, money(totals.vat, cur)]);
+  if (totals.vatRate) {
+    rows.push(['Net of VAT', money(totals.subtotal, cur)]);
+    rows.push([`VAT at ${pct(totals.vatRate, 0)}`, money(totals.vat, cur)]);
+  }
 
   rows.forEach(([label, value]) => {
     setType(doc, 9, 'normal', MUTED);
@@ -279,7 +304,17 @@ function totalsBlock(doc, y, totals, cur, quote) {
 
   y += 12;
   setType(doc, 7.5, 'normal', MUTED);
-  doc.text(`${totals.units} unit${totals.units === 1 ? '' : 's'}  ·  all prices include VAT`, x, y, { align: 'right' });
+  doc.text(`${totals.units} unit${totals.units === 1 ? '' : 's'}  ·  ${basisCaption(quote, totals)}`, x, y, {
+    align: 'right',
+  });
+
+  // The note sits under the block, ranged with it, in the quote's own words when
+  // one is written and a sensible default when it is not.
+  if (noteLines.length) {
+    setType(doc, 7, 'normal', MUTED);
+    noteLines.forEach((line, i) => doc.text(line, x, y + 14 + i * 9, { align: 'right' }));
+    y += 14 + (noteLines.length - 1) * 9;
+  }
 
   return { startY, endY: y + 26, asideW: CONTENT_W - blockW - 30 };
 }
@@ -374,4 +409,33 @@ function splitLines(value) {
     .split(/\n+/)
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+/* ------------------------------------------------------------ VAT display */
+
+/** True when the quotation is set to print both the net and the gross figure. */
+/** What the figures in the table mean, said once under the total. */
+function basisCaption(quote, totals) {
+  if (!totals.vatRate) return 'no VAT charged';
+  const mode = quote.priceDisplay || 'both';
+  if (mode === 'incl') return 'all prices include VAT';
+  if (mode === 'excl') return 'prices exclude VAT, total includes it';
+  return 'unit and amount excl. VAT, incl. beneath';
+}
+
+function showsBoth(quote) {
+  return Boolean(quote.vatRate) && (quote.priceDisplay || 'both') === 'both';
+}
+
+/**
+ * The figure that leads each column.
+ *
+ * Net leads unless the quotation is set to show VAT-inclusive prices only — a
+ * quote is a commercial document, and the net price is the one being negotiated.
+ * With no VAT to add, the two are the same number and only one is printed.
+ */
+function primary(line, which, quote) {
+  const inclusive = !quote.vatRate || (quote.priceDisplay || 'both') === 'incl';
+  if (which === 'unit') return inclusive ? line.unitGross : line.unitNet;
+  return inclusive ? line.grossTotal : line.netTotal;
 }

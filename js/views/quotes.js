@@ -4,6 +4,7 @@ import { CATEGORIES, displayName } from '../catalog.js';
 import { load, products, saveQuote, deleteQuote, nextQuoteRef, uid, saveSale } from '../store.js';
 import {
   priceQuote, breakEvenDiscount, maxDiscountForMargin, marginVerdict, VERDICT_TONE,
+  VAT_PRESETS, PRICE_DISPLAY, suggestedVatNote,
 } from '../pricing.js';
 import { buildQuotePdf, quoteFilename } from '../pdf.js';
 import { loadBrandFonts } from '../fonts.js';
@@ -88,6 +89,8 @@ function blankQuote() {
     currency: settings.currency,
     vatRate: settings.vatRate,
     minMargin: settings.minMargin,
+    priceDisplay: settings.priceDisplay,
+    vatNote: settings.vatNote,
     discount: 0,
     commissionRate: settings.commissionRate,
     leadTime: settings.leadTime,
@@ -273,6 +276,49 @@ function pricingPanel(quote, onChange) {
     ),
   );
 
+  const vatChips = el(
+    'div',
+    { class: 'chips' },
+    ...VAT_PRESETS.map((preset) =>
+      el(
+        'button',
+        {
+          class: 'chip',
+          type: 'button',
+          'aria-pressed': String(Math.abs(quote.vatRate - preset.value) < 0.0001),
+          onclick: (e) => {
+            quote.vatRate = preset.value;
+            vatInput.value = toPercentInput(preset.value);
+            e.currentTarget.parentElement.querySelectorAll('.chip').forEach((c) => c.setAttribute('aria-pressed', 'false'));
+            e.currentTarget.setAttribute('aria-pressed', 'true');
+            // The suggestion lives in the placeholder, so switching rate just
+            // re-suggests; anything typed by hand is left alone.
+            noteInput.placeholder = suggestedVatNote(preset.value, load().company);
+            onChange();
+          },
+        },
+        preset.label,
+      ),
+    ),
+  );
+
+  const noteInput = el('textarea', {
+    class: 'input',
+    placeholder: suggestedVatNote(quote.vatRate, load().company),
+  }, quote.vatNote || '');
+  noteInput.addEventListener('input', () => {
+    quote.vatNote = noteInput.value;
+  });
+
+  const displaySelect = select(
+    Object.entries(PRICE_DISPLAY).map(([value, label]) => ({ value, label })),
+    { value: quote.priceDisplay || 'both' },
+  );
+  displaySelect.addEventListener('change', () => {
+    quote.priceDisplay = displaySelect.value;
+    onChange();
+  });
+
   return card(
     el(
       'p',
@@ -284,10 +330,22 @@ function pricingPanel(quote, onChange) {
     el(
       'div',
       { class: 'field-grid' },
-      field('VAT %', vatInput, 'Already inside the prices'),
+      field('VAT %', vatInput),
       field('Margin floor %', floorInput, 'Flags anything below'),
     ),
+    vatChips,
+    field('Show prices', displaySelect, 'How the quotation reads'),
+    field('VAT note', noteInput, 'Printed under the totals'),
   );
+}
+
+/** One unit price, written the way this quotation is set to present prices. */
+function unitLabel(line, quote) {
+  const code = quote.currency;
+  if (!quote.vatRate) return currency(line.unitGross, { code });
+  if (quote.priceDisplay === 'incl') return currency(line.unitGross, { code });
+  if (quote.priceDisplay === 'excl') return `${currency(line.unitNet, { code })} + VAT`;
+  return `${currency(line.unitNet, { code })} + VAT = ${currency(line.unitGross, { code })}`;
 }
 
 function linesPanel(quote, onChange) {
@@ -333,8 +391,8 @@ function linesPanel(quote, onChange) {
             [
               // Show the journey from list to quoted price, so the discount is legible.
               line.discountApplied > 0.0001
-                ? `${currency(line.listGross, { code: quote.currency })} → ${currency(line.unitGross, { code: quote.currency })}`
-                : `${currency(line.unitGross, { code: quote.currency })} each`,
+                ? `${currency(line.listGross, { code: quote.currency })} → ${unitLabel(line, quote)}`
+                : `${unitLabel(line, quote)} each`,
               line.discountApplied > 0.0001 ? `${percent(line.discountApplied)} off` : null,
               `${percent(line.margin)} margin`,
             ]
@@ -699,7 +757,15 @@ function editLine(quote, index, onChange) {
         `A quote-wide discount of ${percent(quote.discount)} is already applied on top of anything set here.`,
       ),
       field('Unit cost', cost, 'Only changes this quotation'),
-      field('Fixed unit price', override, 'Including VAT. Leave blank to use the retail price'),
+      field(
+        'Fixed unit price',
+        override,
+        // Prices are held VAT-inclusive whatever the quotation is set to show, so
+        // say so rather than letting the display setting mislead what to type.
+        quote.vatRate
+          ? `Including VAT at ${percent(quote.vatRate)}. Leave blank to use the retail price`
+          : 'Leave blank to use the retail price',
+      ),
       field('Spec line', spec, 'Printed under the item name'),
     ),
     {

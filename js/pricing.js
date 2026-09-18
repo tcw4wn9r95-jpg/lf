@@ -163,6 +163,28 @@ export function marginVerdict(margin, minMargin = 0, profit = 0) {
 
 export const VERDICT_TONE = { ok: 'good', thin: 'due', loss: 'alert' };
 
+/* Rates worth one tap: zero-rated exports, the UK standard rate, the Spanish one. */
+export const VAT_PRESETS = [
+  { value: 0, label: 'None' },
+  { value: 0.2, label: 'UK 20%' },
+  { value: 0.21, label: 'ES 21%' },
+];
+
+export const PRICE_DISPLAY = {
+  both: 'Both, excl. and incl. VAT',
+  excl: 'Excluding VAT',
+  incl: 'Including VAT',
+};
+
+/** Wording suggested for a rate, editable and only used when the note is empty. */
+export function suggestedVatNote(vatRate, company) {
+  if (!vatRate) {
+    return 'Zero-rated supply. VAT is accounted for by the customer under the reverse charge.';
+  }
+  const number = company?.vatNumber ? ` VAT ${company.vatNumber}.` : '';
+  return `Prices are shown excluding and including VAT at ${(vatRate * 100).toFixed(0)}%.${number}`;
+}
+
 function num(v) {
   const n = typeof v === 'string' ? parseFloat(v) : v;
   return Number.isFinite(n) ? n : 0;
@@ -291,24 +313,26 @@ export function costStack(product, { reclaimImportVat = false } = {}) {
  * Markup is on cost (cost x 1.8), which is how a quote for custom work is put
  * together. The margin it implies is returned alongside, because that is what the
  * quotation screen judges a discount against.
+ *
+ * The price is settled EXCLUDING VAT — that is the number being decided, and the
+ * one rounded to something tidy. VAT is added to it afterwards, so the net price
+ * stays clean rather than being whatever falls out of a rounded gross.
  */
 export function priceFromMarkup({ cost = 0, markup = 0, vatRate = 0, rounding = 0, commissionRate = 0 }) {
   const unitCost = num(cost);
-  const net = unitCost * (1 + num(markup));
-  // Round the VAT-inclusive price, since that is the number the customer sees.
-  const gross = roundTo(net * (1 + num(vatRate)), num(rounding));
-  const netFromGross = gross / (1 + num(vatRate));
-  const commission = netFromGross * clampFraction(commissionRate);
-  const profit = round2(netFromGross - unitCost - commission);
+  const net = roundTo(unitCost * (1 + num(markup)), num(rounding));
+  const gross = round2(net * (1 + num(vatRate)));
+  const commission = net * clampFraction(commissionRate);
+  const profit = round2(net - unitCost - commission);
 
   return {
     unitCost: round2(unitCost),
-    net: round2(netFromGross),
-    gross: round2(gross),
-    vat: round2(gross - netFromGross),
+    net: round2(net),
+    gross,
+    vat: round2(gross - net),
     commission: round2(commission),
     profit,
-    margin: netFromGross ? profit / netFromGross : 0,
+    margin: net ? profit / net : 0,
     markupApplied: unitCost ? profit / unitCost : 0,
   };
 }

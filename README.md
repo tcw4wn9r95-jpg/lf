@@ -43,8 +43,17 @@ Each row reads £116.00 → £87.00 · 25% off · 46% margin with a **thin** or 
 cost** tag. Open a line and it gives you the number to negotiate with: *most you
 can give at your 30% floor is 43%, break-even at 60%.*
 
-VAT is pulled back out only to work out what a sale earns, and is shown inside the
-total: retail value, discount, net of VAT, VAT, total. The PDF reads the same way.
+**VAT is yours to set per quotation.** Tap *None*, *UK 20%* or *ES 21%* (or type a
+rate), choose how the quotation reads — both bases, excluding VAT, or including —
+and write the note that prints under the totals. Leave the note empty and one is
+suggested from the rate: a reverse-charge line at 0%, the rate and your VAT number
+otherwise.
+
+The totals column always runs straight down in whichever basis the table is
+written in — retail value, discount, net of VAT, VAT, total — so the figures tie
+without arithmetic. In *both* mode each line carries the VAT-inclusive price
+quietly beneath the excluding one. At 0% the VAT rows disappear entirely.
+Quotations written before this existed reprint exactly as they were sent.
 
 ### Keeping figures current
 Import a CSV (the Files app reaches Google Drive directly), or point the app at a
@@ -57,8 +66,10 @@ whole model. Settings writes that template for you. See
 ### Custom products
 **Customise a product** takes an existing one, inherits its whole cost structure,
 and lets you add what this job needs on top — sublimation artwork, a pad upgrade,
-a woven label, artwork setup — as one-tap presets or your own lines. Set a markup
-and it reads straight down:
+a woven label, artwork setup — as one-tap presets or your own lines. The markup
+lands on the price **excluding** VAT, which is then rounded and the VAT added, so
+the number you set a margin against is the one you actually earn. It reads
+straight down:
 
 ```
 Manufacture                              £32.83
@@ -76,10 +87,10 @@ Woven neck label                          £0.30
 Elastic Interface pad upgrade             £6.00
 Club artwork setup                        £2.40
 Unit cost                                £50.91
-Markup at 150%                           £76.59
-Sale price excl. VAT                    £127.50
-VAT at 20%                               £25.50
-Sale price incl. VAT                    £153.00
+Markup at 150%                           £76.09
+Sale price excl. VAT                    £127.00
+VAT at 20%                               £25.40
+Sale price incl. VAT                    £152.40
 ```
 
 with the profit and margin underneath. Saved, it joins the catalogue and quotes

@@ -5,6 +5,7 @@ import { load, update, exportBundle, importBundle, wipe } from '../store.js';
 import { APP_VERSION } from '../version.js';
 import { PROFILE_DEFAULTS, profile } from '../deadlines.js';
 import { syncNow, parseFigures, applyFigures, syncUrlIsUsable, looksPublished, figuresTemplateCsv } from '../sync.js';
+import { PRICE_DISPLAY, suggestedVatNote } from '../pricing.js';
 import {
   el, card, sectionTitle, button, input, select, field, sheet, closeSheet, toast,
   toFraction, toPercentInput, downloadBlob, confirmSheet,
@@ -361,7 +362,27 @@ function defaultsPanel(data) {
       bind(input({ type: 'number', inputmode: 'decimal', step: '1', value: toPercentInput(s.vatRate) }), (set, v) => {
         set.vatRate = toFraction(v);
       }),
-      'Prices are shown with VAT already inside them',
+      'Catalogue prices already include VAT. The quotation can show either basis',
+    ),
+    field(
+      'Show prices',
+      bind(
+        select(
+          Object.entries(PRICE_DISPLAY).map(([value, label]) => ({ value, label })),
+          { value: s.priceDisplay || 'both' },
+        ),
+        (set, v) => {
+          set.priceDisplay = v;
+        },
+      ),
+      'How new quotations read. Each one can be changed on its own',
+    ),
+    field(
+      'VAT note',
+      bind(el('textarea', { class: 'input', placeholder: suggestedVatNote(s.vatRate, data.company) }, s.vatNote || ''), (set, v) => {
+        set.vatNote = v;
+      }),
+      'Printed under the totals. Left empty, a note is suggested from the rate',
     ),
     field(
       'Margin floor %',

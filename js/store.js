@@ -32,6 +32,9 @@ export const DEFAULTS = Object.freeze({
     vatRate: 0.2,
     /* The margin a quote should not go below. Drives the verdict on every line. */
     minMargin: 0.3,
+    /* How a quotation presents prices, and the VAT wording that goes with it. */
+    priceDisplay: 'both',
+    vatNote: '',
     commissionRate: 0.02,
     /* Unit-economics assumptions, from the financial model's Suposiciones tab. */
     saleDiscount: 0.05,
@@ -123,7 +126,9 @@ function migrate(saved) {
     settings: { ...base.settings, ...(saved.settings || {}) },
     financials: saved.financials || {},
     customProducts: saved.customProducts || [],
-    quotes: saved.quotes || [],
+    // Quotations written before prices could be shown either way were inclusive
+    // of VAT; pin them there so a reprint matches what the customer was sent.
+    quotes: (saved.quotes || []).map((q) => (q.priceDisplay ? q : { ...q, priceDisplay: 'incl' })),
     sales: saved.sales || [],
     deadlines: { ...base.deadlines, ...(saved.deadlines || {}) },
   };
