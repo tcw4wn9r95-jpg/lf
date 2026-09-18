@@ -185,12 +185,41 @@ export { num as toNumber, round2 };
 export const COST_LINES = [
   { key: 'manufacture', label: 'Manufacture', group: 'production' },
   { key: 'packaging', label: 'Packaging', group: 'production' },
-  { key: 'freightIn', label: 'Transport CN → LU', group: 'logistics' },
-  { key: 'freightOut', label: 'Transport LU → ES', group: 'logistics' },
+  { key: 'freightIn', label: 'Inbound freight', group: 'logistics' },
+  { key: 'freightOut', label: 'Onward delivery', group: 'logistics' },
   { key: 'insurance', label: 'Insurance', group: 'logistics' },
   { key: 'duty', label: 'Duty', group: 'logistics' },
   { key: 'importVat', label: 'Import VAT', group: 'logistics' },
 ];
+
+/* Where each manufacturer ships from. Goods land in the UK either way. */
+export const ORIGINS = {
+  engobe: 'Spain',
+  sobike: 'China',
+};
+
+export const DESTINATION = 'UK';
+
+/** The country a product is made in, from its manufacturer. Null when unknown. */
+export function productOrigin(product) {
+  return ORIGINS[String(product?.maker || '').trim().toLowerCase()] || null;
+}
+
+/**
+ * Label a cost line for a specific product, so the freight legs name the route
+ * actually taken rather than one generic to the catalogue.
+ */
+export function costLineLabel(key, product) {
+  const meta = COST_LINES.find((c) => c.key === key);
+  if (!meta) return key;
+
+  if (key === 'freightIn') {
+    const origin = productOrigin(product);
+    return origin ? `Transport ${origin} → ${DESTINATION}` : `Transport to ${DESTINATION}`;
+  }
+  if (key === 'freightOut') return `Delivery within ${DESTINATION}`;
+  return meta.label;
+}
 
 /** Per-unit costs added on top of a base product: printing, pads, labels, artwork. */
 export function customisationLines(product) {

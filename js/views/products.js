@@ -2,7 +2,10 @@
 
 import { CATEGORIES, CATEGORY_LABEL, displayName } from '../catalog.js';
 import { load, products, setFinancials, update, uid, hasFinancials } from '../store.js';
-import { COST_LINES, costStack, unitEconomics, sheetComparison, priceFromMarkup, ROUNDING } from '../pricing.js';
+import {
+  COST_LINES, costStack, costLineLabel, productOrigin, DESTINATION, unitEconomics,
+  sheetComparison, priceFromMarkup, ROUNDING,
+} from '../pricing.js';
 import {
   el, sectionTitle, button, input, select, field, sheet, closeSheet, toast,
   currency, percent, confirmSheet, toFraction, toPercentInput,
@@ -123,50 +126,61 @@ function openProduct(id) {
   });
 }
 
+/**
+ * The landed-cost rows for a product, as <tr> elements.
+ *
+ * Shared so the product screen and the customisation builder show the same
+ * breakdown rather than two versions of the truth. `upTo` stops before the total
+ * when the caller is going to carry on adding to it.
+ */
+function costStackRows(p, stack, { includeTotal = true } = {}) {
+  const rows = [];
+  const line = (key) => rows.push(ledgerRow(costLineLabel(key, p), currency(stack.lines[key])));
+
+  line('manufacture');
+  line('packaging');
+  rows.push(ledgerRow('FOB', currency(stack.fob), 'is-subtotal'));
+  line('freightIn');
+  line('freightOut');
+  line('insurance');
+  line('duty');
+  line('importVat');
+  rows.push(ledgerRow('Import costs', currency(stack.importCosts), 'is-subtotal'));
+  if (stack.recovered) {
+    rows.push(ledgerRow('Less import VAT reclaimed', `-${currency(stack.recovered)}`, 'is-good'));
+  }
+  if (includeTotal) {
+    rows.push(ledgerRow('Landed cost (DDP)', currency(stack.baseLanded), 'is-subtotal'));
+  }
+  return rows;
+}
+
 /** The landed-cost stack, line by line, the way the financial model builds it. */
 function costStackTable(p, { stack }, settings) {
   const out = el('div', {}, sectionTitle('What a unit costs'));
 
   if (!stack.hasBreakdown) {
-    out.appendChild(
-      el('table', { class: 'ledger' }, el('tbody', {}, ledgerRow('Landed cost (DDP)', currency(stack.landed), 'is-total'))),
-    );
+    const tbody = el('tbody');
+    stack.customisations.forEach((c) => tbody.appendChild(ledgerRow(c.label, currency(c.amount))));
+    tbody.appendChild(ledgerRow('Unit cost', currency(stack.landed), 'is-total'));
+    out.appendChild(el('table', { class: 'ledger' }, tbody));
     out.appendChild(el('p', { class: 'inline-note' }, 'No cost breakdown imported for this product — only the total.'));
     return out;
   }
 
-  const table = el('table', { class: 'ledger' });
   const tbody = el('tbody');
-  const line = (key) => {
-    const meta = COST_LINES.find((c) => c.key === key);
-    return ledgerRow(meta.label, currency(stack.lines[key]));
-  };
-
-  tbody.appendChild(line('manufacture'));
-  tbody.appendChild(line('packaging'));
-  tbody.appendChild(ledgerRow('FOB', currency(stack.fob), 'is-subtotal'));
-  tbody.appendChild(line('freightIn'));
-  tbody.appendChild(line('freightOut'));
-  tbody.appendChild(line('insurance'));
-  tbody.appendChild(line('duty'));
-  tbody.appendChild(line('importVat'));
-  tbody.appendChild(ledgerRow('Import costs', currency(stack.importCosts), 'is-subtotal'));
-  if (stack.recovered) {
-    tbody.appendChild(ledgerRow('Less import VAT reclaimed', `-${currency(stack.recovered)}`, 'is-good'));
-  }
+  costStackRows(p, stack, { includeTotal: stack.customisations.length > 0 }).forEach((r) => tbody.appendChild(r));
 
   if (stack.customisations.length) {
-    tbody.appendChild(ledgerRow('Landed cost (DDP)', currency(stack.baseLanded), 'is-subtotal'));
-    stack.customisations.forEach((line) => tbody.appendChild(ledgerRow(line.label, currency(line.amount))));
+    stack.customisations.forEach((c) => tbody.appendChild(ledgerRow(c.label, currency(c.amount))));
     tbody.appendChild(ledgerRow('Customisation', currency(stack.customisationTotal), 'is-subtotal'));
     tbody.appendChild(ledgerRow('Unit cost', currency(stack.landed), 'is-total'));
   } else {
     tbody.appendChild(ledgerRow('Landed cost (DDP)', currency(stack.landed), 'is-total'));
   }
-  table.appendChild(tbody);
-  out.appendChild(table);
+  out.appendChild(el('table', { class: 'ledger' }, tbody));
 
-  // Where the money actually goes, as a share of landed cost.
+  // Where the money actually goes, as a share of unit cost.
   const share = (v) => (stack.landed ? Math.max(0, (v / stack.landed) * 100) : 0);
   out.appendChild(
     el(
@@ -179,13 +193,15 @@ function costStackTable(p, { stack }, settings) {
       el('span', { class: 'seg-custom', style: { width: `${share(stack.customisationTotal)}%` } }),
     ),
   );
+
+  const origin = productOrigin(p);
   out.appendChild(
     el(
       'p',
       { class: 'inline-note' },
       [
-        `${percent(stack.fob / (stack.landed || 1))} made`,
-        `${percent((stack.lines.freightIn + stack.lines.freightOut) / (stack.landed || 1))} shipped`,
+        `${percent(stack.fob / (stack.landed || 1))} made${origin ? ` in ${origin}` : ''}`,
+        `${percent((stack.lines.freightIn + stack.lines.freightOut) / (stack.landed || 1))} shipped to ${DESTINATION}`,
         `${percent((stack.lines.duty + stack.lines.insurance) / (stack.landed || 1))} duty and insurance`,
         stack.lines.importVat && !stack.recovered
           ? `${percent(stack.lines.importVat / (stack.landed || 1))} import VAT`
@@ -372,10 +388,7 @@ function editProduct(p) {
   flatCostInput.addEventListener('input', recalc);
   recalc();
 
-  const costField = (key) => {
-    const meta = COST_LINES.find((c) => c.key === key);
-    return field(meta.label, costInputs[key]);
-  };
+  const costField = (key) => field(costLineLabel(key, p || {}), costInputs[key]);
 
   const body = el(
     'div',
@@ -563,10 +576,26 @@ function buildCustom(base, existing = null) {
 
     const table = el('table', { class: 'ledger' });
     const tbody = el('tbody');
-    tbody.appendChild(ledgerRow(`Landed cost · ${displayName(base)}`, currency(baseStack.landed)));
+    // The inherited stack in full, so a custom price can be argued from the
+    // manufacture cost up rather than from a single inherited number.
+    if (baseStack.hasBreakdown) {
+      costStackRows(base, baseStack).forEach((r) => tbody.appendChild(r));
+    } else {
+      tbody.appendChild(ledgerRow(`Landed cost · ${displayName(base)}`, currency(baseStack.landed), 'is-subtotal'));
+    }
+
     extras.forEach((x) => {
       if (parseFloat(x.amount)) tbody.appendChild(ledgerRow(x.label || 'Customisation', currency(parseFloat(x.amount))));
     });
+    if (extras.some((x) => parseFloat(x.amount))) {
+      tbody.appendChild(
+        ledgerRow(
+          'Customisation',
+          currency(round2(extras.reduce((t, x) => t + (parseFloat(x.amount) || 0), 0))),
+          'is-subtotal',
+        ),
+      );
+    }
     tbody.appendChild(ledgerRow('Unit cost', currency(unitCost), 'is-subtotal'));
     tbody.appendChild(ledgerRow(`Markup at ${percent(toFraction(markupInput.value))}`, currency(priced.net - unitCost)));
     tbody.appendChild(ledgerRow('Sale price excl. VAT', currency(priced.net), 'is-subtotal'));
@@ -666,6 +695,11 @@ function buildCustom(base, existing = null) {
     {},
     field('Name', nameInput, 'What it is called on the quotation'),
     field('Reference', codeInput),
+    el(
+      'p',
+      { class: 'inline-note' },
+      `Inherits the cost structure of ${displayName(base)}${productOrigin(base) ? `, made in ${productOrigin(base)}` : ''}.`,
+    ),
     sectionTitle('Costs on top'),
     extrasSlot,
     sectionTitle('Price'),

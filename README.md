@@ -61,7 +61,16 @@ a woven label, artwork setup — as one-tap presets or your own lines. Set a mar
 and it reads straight down:
 
 ```
-Landed cost · Men's Equinnox Jersey LS   £37.71
+Manufacture                              £32.83
+Packaging                                 £0.15
+FOB                                      £32.98
+Transport Spain → UK                      £2.08
+Delivery within UK                        £1.00
+Insurance                                 £1.65
+Duty                                      £0.00
+Import VAT                                £0.00
+Import costs                              £4.73
+Landed cost (DDP)                        £37.71
 Full sublimation artwork                  £4.50
 Woven neck label                          £0.30
 Elastic Interface pad upgrade             £6.00
@@ -80,7 +89,7 @@ quantity, unit, amount. None of the breakdown reaches the customer.
 ### Products
 Every product carries the whole Unit Economics table from the financial model.
 Tap one and you get the landed cost built up line by line — manufacture,
-packaging, FOB, transport CN→LU and LU→ES, insurance, duty, import VAT — with a
+packaging, FOB, inbound freight, UK delivery, insurance, duty, import VAT — with a
 bar showing what share of the cost is making, shipping and tax. Below that, the
 price ladder: retail, sale, collab and distributor, each with the VAT that comes
 out, the commission, the profit and the margin left, plus the break-even price

@@ -102,7 +102,7 @@ Syncing **merges**: it updates the products the sheet mentions and leaves
 everything else — your quotations, sales, and any cost you typed by hand — alone.
 
 A CSV carries only the landed total. The full cost stack (manufacture, packaging,
-freight in and out, insurance, duty, import VAT) comes from the JSON file, under
+inbound freight, UK delivery, insurance, duty, import VAT) comes from the JSON file, under
 `breakdown`, and is what the product screen draws its table from.
 
 ## Where the app and the spreadsheet disagree
