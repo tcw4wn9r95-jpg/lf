@@ -563,3 +563,24 @@ select.input {
 @media (min-width: 560px) {
   .stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
+
+/* Cost-stack proportion bar. Monochrome: the segments read as weight, not colour. */
+.cost-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--hairline);
+  margin: 12px 0 6px;
+}
+.cost-bar > span { display: block; height: 100%; }
+.cost-bar .seg-make { background: var(--ink); }
+.cost-bar .seg-freight { background: #6f6f6f; }
+.cost-bar .seg-duty { background: #a8a8a8; }
+.cost-bar .seg-vat { background: repeating-linear-gradient(45deg, #c9c9c9 0 3px, #e4e1dc 3px 6px); }
+
+.ledger .is-subtotal td {
+  font-weight: 600;
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline-strong);
+}

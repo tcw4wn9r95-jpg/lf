@@ -1,7 +1,8 @@
-/* Products — the catalogue and its unit economics. */
+/* Products — the catalogue, and the unit economics behind each one. */
 
 import { CATEGORIES, CATEGORY_LABEL, displayName } from '../catalog.js';
 import { load, products, setFinancials, update, uid, hasFinancials } from '../store.js';
+import { COST_LINES, costStack, unitEconomics, sheetComparison } from '../pricing.js';
 import {
   el, sectionTitle, button, input, select, field, sheet, closeSheet, toast,
   currency, percent, confirmSheet,
@@ -39,18 +40,15 @@ export default function productsView({ navigate }) {
     wrap.appendChild(list);
   });
 
-  wrap.appendChild(
-    el('div', { class: 'btn-row' }, button('Add a product', { onclick: () => editProduct(null) })),
-  );
+  wrap.appendChild(el('div', { class: 'btn-row' }, button('Add a product', { onclick: () => editProduct(null) })));
 
   return wrap;
 }
 
 function productRow(p, data) {
-  const vatRate = data.settings.vatRate;
-  // Margin at RRP is the honest headline: what the product earns at its own list price.
-  const exVat = p.rrp ? p.rrp / (1 + vatRate) : null;
-  const margin = exVat && p.cost !== null ? (exVat - p.cost) / exVat : null;
+  const { tiers } = unitEconomics(p, data.settings);
+  const retail = tiers[0];
+  const thin = retail.gross > 0 && retail.margin < 0.2;
 
   return el(
     'button',
@@ -64,33 +62,34 @@ function productRow(p, data) {
     el(
       'div',
       { class: 'row-end' },
-      el('div', { class: 'row-value' }, p.cost === null ? '—' : currency(p.cost)),
+      el('div', { class: 'row-value' }, p.cost === null ? '—' : currency(retail.cost)),
       el(
         'div',
-        { class: `row-value-sub ${margin !== null && margin < 0.2 ? 'text-alert' : ''}` },
-        margin === null ? 'no cost' : `${percent(margin)} at RRP`,
+        { class: `row-value-sub ${thin ? 'text-alert' : ''}` },
+        p.cost === null ? 'no cost' : retail.gross ? `${percent(retail.margin)} at retail` : 'no RRP',
       ),
     ),
   );
 }
 
-/* ------------------------------------------------------------------ detail */
+/* ---------------------------------------------------------- unit economics */
 
 function openProduct(id) {
   const p = products().find((x) => x.id === id);
   if (!p) return;
-  const data = load();
-  const vatRate = data.settings.vatRate;
+  const { settings } = load();
 
   const body = el('div');
 
   if (p.cost === null) {
     body.appendChild(el('p', { class: 'prose' }, 'No unit cost recorded for this product yet.'));
   } else {
-    body.appendChild(costTable(p, vatRate, data));
+    const economics = unitEconomics(p, settings);
+    body.appendChild(costStackTable(p, economics, settings));
+    body.appendChild(tierTable(p, economics, settings));
+    body.appendChild(decisionNotes(p, economics, settings));
   }
 
-  if (p.breakdown) body.appendChild(breakdownTable(p));
   if (p.notes) body.appendChild(el('p', { class: 'inline-note' }, p.notes));
 
   sheet(displayName(p), body, {
@@ -108,83 +107,192 @@ function openProduct(id) {
   });
 }
 
-function costTable(p, vatRate, data) {
-  const exVat = p.rrp ? p.rrp / (1 + vatRate) : null;
-  const rows = [
-    ['Landed unit cost (DDP)', currency(p.cost), ''],
-    p.rrp ? ['RRP incl. VAT', currency(p.rrp), ''] : null,
-    exVat ? ['RRP excl. VAT', currency(exVat), ''] : null,
-  ].filter(Boolean);
+/** The landed-cost stack, line by line, the way the financial model builds it. */
+function costStackTable(p, { stack }, settings) {
+  const out = el('div', {}, sectionTitle('What a unit costs'));
+
+  if (!stack.hasBreakdown) {
+    out.appendChild(
+      el('table', { class: 'ledger' }, el('tbody', {}, ledgerRow('Landed cost (DDP)', currency(stack.landed), 'is-total'))),
+    );
+    out.appendChild(el('p', { class: 'inline-note' }, 'No cost breakdown imported for this product — only the total.'));
+    return out;
+  }
 
   const table = el('table', { class: 'ledger' });
   const tbody = el('tbody');
-  rows.forEach(([label, value]) => tbody.appendChild(el('tr', {}, el('td', {}, label), el('td', {}, value))));
+  const line = (key) => {
+    const meta = COST_LINES.find((c) => c.key === key);
+    return ledgerRow(meta.label, currency(stack.lines[key]));
+  };
+
+  tbody.appendChild(line('manufacture'));
+  tbody.appendChild(line('packaging'));
+  tbody.appendChild(ledgerRow('FOB', currency(stack.fob), 'is-subtotal'));
+  tbody.appendChild(line('freightIn'));
+  tbody.appendChild(line('freightOut'));
+  tbody.appendChild(line('insurance'));
+  tbody.appendChild(line('duty'));
+  tbody.appendChild(line('importVat'));
+  tbody.appendChild(ledgerRow('Import costs', currency(stack.importCosts), 'is-subtotal'));
+  if (stack.recovered) {
+    tbody.appendChild(ledgerRow('Less import VAT reclaimed', `-${currency(stack.recovered)}`, 'is-good'));
+  }
+  tbody.appendChild(ledgerRow('Landed cost (DDP)', currency(stack.landed), 'is-total'));
   table.appendChild(tbody);
+  out.appendChild(table);
 
-  const out = el('div', {}, table);
+  // Where the money actually goes, as a share of landed cost.
+  const share = (v) => (stack.landed ? Math.max(0, (v / stack.landed) * 100) : 0);
+  out.appendChild(
+    el(
+      'div',
+      { class: 'cost-bar', 'aria-hidden': 'true' },
+      el('span', { class: 'seg-make', style: { width: `${share(stack.fob)}%` } }),
+      el('span', { class: 'seg-freight', style: { width: `${share(stack.lines.freightIn + stack.lines.freightOut)}%` } }),
+      el('span', { class: 'seg-duty', style: { width: `${share(stack.lines.duty + stack.lines.insurance)}%` } }),
+      el('span', { class: 'seg-vat', style: { width: `${share(stack.lines.importVat - stack.recovered)}%` } }),
+    ),
+  );
+  out.appendChild(
+    el(
+      'p',
+      { class: 'inline-note' },
+      `${percent(stack.fob / (stack.landed || 1))} made, ${percent(
+        (stack.lines.freightIn + stack.lines.freightOut) / (stack.landed || 1),
+      )} shipped, ${percent((stack.lines.duty + stack.lines.insurance) / (stack.landed || 1))} duty and insurance` +
+        (stack.lines.importVat && !stack.recovered
+          ? `, ${percent(stack.lines.importVat / (stack.landed || 1))} import VAT`
+          : ''),
+    ),
+  );
 
-  if (exVat) {
-    const profit = exVat - p.cost;
-    const margin = profit / exVat;
+  return out;
+}
+
+/** What each price on the ladder actually leaves behind. */
+function tierTable(p, { tiers, floorGross }, settings) {
+  if (!p.rrp) {
+    return el(
+      'div',
+      {},
+      sectionTitle('What it earns'),
+      el('p', { class: 'prose' }, 'No RRP set, so there is nothing to price against yet.'),
+      el('p', { class: 'inline-note' }, `It would need to sell above ${currency(floorGross)} including VAT just to break even.`),
+    );
+  }
+
+  const out = el('div', {}, sectionTitle('What it earns'));
+  const table = el('table', { class: 'ledger' });
+  table.appendChild(
+    el(
+      'thead',
+      {},
+      el('tr', {}, el('th', {}, 'Tier'), el('th', {}, 'Price'), el('th', {}, 'Net'), el('th', {}, 'Profit'), el('th', {}, 'Margin')),
+    ),
+  );
+
+  const tbody = el('tbody');
+  tiers.forEach((t) => {
+    tbody.appendChild(
+      el(
+        'tr',
+        { class: t.profit < 0 ? 'is-alert' : '' },
+        el('td', {}, t.discount ? `${t.label} −${percent(t.discount)}` : t.label),
+        el('td', {}, currency(t.gross)),
+        el('td', {}, currency(t.net)),
+        el('td', {}, currency(t.profit)),
+        el('td', {}, percent(t.margin)),
+      ),
+    );
+  });
+  table.appendChild(tbody);
+  out.appendChild(table);
+
+  const retail = tiers[0];
+  out.appendChild(
+    el(
+      'p',
+      { class: 'inline-note' },
+      `Price shown includes VAT at ${percent(settings.vatRate)}. Net is after VAT; profit is after VAT, ` +
+        `${percent(settings.commissionRate)} commission and the landed cost.`,
+    ),
+  );
+
+  // The single line-by-line breakdown of retail, so the arithmetic is visible.
+  const detail = el('table', { class: 'ledger' });
+  detail.appendChild(
+    el(
+      'tbody',
+      {},
+      ledgerRow(`Retail price (incl. VAT at ${percent(settings.vatRate)})`, currency(retail.gross)),
+      ledgerRow('Less VAT to HMRC', `-${currency(retail.vat)}`),
+      ledgerRow('Net revenue', currency(retail.net), 'is-subtotal'),
+      ledgerRow(`Less commission at ${percent(settings.commissionRate)}`, `-${currency(retail.commission)}`),
+      ledgerRow('Less landed cost', `-${currency(retail.cost)}`),
+      ledgerRow('Profit per unit', currency(retail.profit), retail.profit < 0 ? 'is-total is-alert' : 'is-total is-good'),
+    ),
+  );
+  out.appendChild(el('hr', { class: 'divider' }));
+  out.appendChild(detail);
+
+  return out;
+}
+
+function decisionNotes(p, economics, settings) {
+  const out = el('div', {}, sectionTitle('Worth knowing'));
+  const retail = economics.tiers[0];
+  const notes = [];
+
+  notes.push(`Break-even price is ${currency(economics.floorGross)} including VAT — below that the unit loses money.`);
+
+  if (retail.unitsForOverheads) {
+    notes.push(
+      `${retail.unitsForOverheads} of these a month at retail covers the ${currency(settings.monthlyOverheads)} of fixed costs.`,
+    );
+  }
+
+  const losing = economics.tiers.filter((t) => t.gross > 0 && t.profit < 0);
+  if (losing.length) {
+    notes.push(`Sold at a loss on: ${losing.map((t) => t.label.toLowerCase()).join(', ')}.`);
+  }
+
+  notes.forEach((text) => out.appendChild(el('p', { class: 'prose' }, text)));
+
+  // Reconcile against the spreadsheet, which reaches a different number.
+  const cmp = sheetComparison(p, settings);
+  if (cmp && Math.abs(cmp.difference) >= 0.01) {
     out.appendChild(
-      el('div', { class: `margin-bar ${margin < 0.2 ? 'is-alert' : ''}` }, el('span', { style: { width: `${Math.max(0, Math.min(1, margin)) * 100}%` } })),
+      el(
+        'div',
+        { class: 'hint-block' },
+        el('strong', {}, `${currency(cmp.difference)} higher than the spreadsheet. `),
+        `The model takes VAT as ${percent(cmp.modelVatRate)} of the VAT-inclusive price (${currency(cmp.sheetVat)}) rather than ` +
+          `the VAT inside it, and charges commission on the collab price (${currency(cmp.sheetCommission)}) rather than the ` +
+          `price being sold at (${currency(retail.commission)}). Both understate profit.` +
+          (cmp.sameVatBasis
+            ? ''
+            : ` The model assumed ${percent(cmp.modelVatRate)} VAT; this app is set to ${percent(settings.vatRate)}.`),
+      ),
     );
-    out.appendChild(
-      el('p', { class: 'inline-note' }, `${currency(profit)} gross per unit · ${percent(margin, 1)} margin, ${percent(profit / p.cost, 0)} markup on cost`),
-    );
+  }
 
-    out.appendChild(sectionTitle('At each discount'));
-    const dt = el('table', { class: 'ledger' });
-    dt.appendChild(
-      el('thead', {}, el('tr', {}, el('th', {}, 'Tier'), el('th', {}, 'Price'), el('th', {}, 'Per unit'), el('th', {}, 'Margin'))),
+  if (economics.stack.importVat > 0 && !settings.reclaimImportVat) {
+    out.appendChild(
+      el(
+        'p',
+        { class: 'inline-note' },
+        `Landed cost includes ${currency(economics.stack.importVat)} of import VAT. La Fuga is VAT registered, so that is ` +
+          'reclaimable — switch it off in Settings to see the margin without it.',
+      ),
     );
-    const dbody = el('tbody');
-    [{ label: 'List', value: 0 }, ...data.settings.discountPresets].forEach(({ label, value }) => {
-      const price = exVat * (1 - value);
-      const unitProfit = price - p.cost;
-      const m = price ? unitProfit / price : 0;
-      dbody.appendChild(
-        el(
-          'tr',
-          { class: unitProfit < 0 ? 'is-alert' : '' },
-          el('td', {}, value ? `${label} (${percent(value)})` : label),
-          el('td', {}, currency(price * (1 + vatRate))),
-          el('td', {}, currency(unitProfit)),
-          el('td', {}, percent(m)),
-        ),
-      );
-    });
-    dt.appendChild(dbody);
-    out.appendChild(dt);
-    out.appendChild(el('p', { class: 'inline-note' }, 'Price column shown inclusive of VAT; per-unit profit and margin exclude it.'));
   }
 
   return out;
 }
 
-function breakdownTable(p) {
-  const labels = {
-    manufacture: 'Manufacture',
-    packaging: 'Packaging',
-    fob: 'FOB',
-    freight: 'Freight',
-    insurance: 'Insurance',
-    duty: 'Duty',
-    importVat: 'Import VAT',
-    importTotal: 'Import costs',
-  };
-  const entries = Object.entries(p.breakdown).filter(([, v]) => Number.isFinite(v));
-  if (!entries.length) return el('div');
-
-  const table = el('table', { class: 'ledger' });
-  const tbody = el('tbody');
-  entries.forEach(([key, value]) => {
-    tbody.appendChild(el('tr', {}, el('td', {}, labels[key] || key), el('td', {}, currency(value))));
-  });
-  tbody.appendChild(el('tr', { class: 'is-total' }, el('td', {}, 'Landed cost'), el('td', {}, currency(p.cost))));
-  table.appendChild(tbody);
-
-  return el('div', {}, sectionTitle('Cost stack'), table);
+function ledgerRow(label, value, cls = '') {
+  return el('tr', { class: cls }, el('td', {}, label), el('td', {}, value));
 }
 
 /* ------------------------------------------------------------------- editor */
@@ -199,9 +307,45 @@ function editProduct(p) {
     CATEGORIES.map((c) => ({ value: c.id, label: c.label })),
     { value: p?.category || 'accessories' },
   );
-  const costInput = input({ type: 'number', step: '0.01', inputmode: 'decimal', value: p?.cost ?? '', placeholder: '0.00' });
   const rrpInput = input({ type: 'number', step: '0.01', inputmode: 'decimal', value: p?.rrp ?? '', placeholder: '0.00' });
   const notesInput = el('textarea', { class: 'input', placeholder: 'Anything worth remembering' }, p?.notes || '');
+
+  // Every element of the stack is editable, so a freight rise can be tried on.
+  const stack = costStack(p || {});
+  const costInputs = {};
+  COST_LINES.forEach(({ key }) => {
+    costInputs[key] = input({
+      type: 'number',
+      step: '0.01',
+      inputmode: 'decimal',
+      value: stack.hasBreakdown ? stack.lines[key] : '',
+      placeholder: '0.00',
+    });
+  });
+  const flatCostInput = input({
+    type: 'number',
+    step: '0.01',
+    inputmode: 'decimal',
+    value: stack.hasBreakdown ? '' : (p?.cost ?? ''),
+    placeholder: '0.00',
+  });
+
+  const total = el('p', { class: 'inline-note' });
+  const recalc = () => {
+    const lines = Object.fromEntries(COST_LINES.map(({ key }) => [key, parseFloat(costInputs[key].value) || 0]));
+    const sum = Object.values(lines).reduce((t, v) => t + v, 0);
+    const flat = parseFloat(flatCostInput.value);
+    const landed = sum > 0 ? sum : Number.isFinite(flat) ? flat : 0;
+    total.textContent = `Landed cost ${currency(landed)}`;
+  };
+  Object.values(costInputs).forEach((node) => node.addEventListener('input', recalc));
+  flatCostInput.addEventListener('input', recalc);
+  recalc();
+
+  const costField = (key) => {
+    const meta = COST_LINES.find((c) => c.key === key);
+    return field(meta.label, costInputs[key]);
+  };
 
   const body = el(
     'div',
@@ -209,12 +353,14 @@ function editProduct(p) {
     isNew ? field('Name', nameInput) : null,
     isNew ? el('div', { class: 'field-grid' }, field('Model number', codeInput), field('Manufacturer', makerInput)) : null,
     isNew ? field('Category', categoryInput) : null,
-    el(
-      'div',
-      { class: 'field-grid' },
-      field('Landed cost', costInput, 'Per unit, DDP, excl. VAT'),
-      field('RRP', rrpInput, 'Incl. VAT'),
-    ),
+    field('RRP', rrpInput, 'Including VAT'),
+    sectionTitle('Cost stack'),
+    el('div', { class: 'field-grid' }, costField('manufacture'), costField('packaging')),
+    el('div', { class: 'field-grid' }, costField('freightIn'), costField('freightOut')),
+    el('div', { class: 'field-grid' }, costField('insurance'), costField('duty')),
+    costField('importVat'),
+    total,
+    field('Or a single landed cost', flatCostInput, 'Used only when the stack above is empty'),
     field('Notes', notesInput),
   );
 
@@ -222,8 +368,6 @@ function editProduct(p) {
     button('Save', {
       variant: 'primary',
       onclick: () => {
-        const cost = parseFloat(costInput.value);
-        const rrp = parseFloat(rrpInput.value);
         let id = p?.id;
 
         if (isNew) {
@@ -242,8 +386,23 @@ function editProduct(p) {
           });
         }
 
+        const lines = {};
+        let sum = 0;
+        COST_LINES.forEach(({ key }) => {
+          const v = parseFloat(costInputs[key].value);
+          if (Number.isFinite(v)) {
+            lines[key] = v;
+            sum += v;
+          }
+        });
+
+        const flat = parseFloat(flatCostInput.value);
+        const hasStack = Object.keys(lines).length > 0 && sum > 0;
+        const rrp = parseFloat(rrpInput.value);
+
         setFinancials(id, {
-          cost: Number.isFinite(cost) ? cost : null,
+          cost: hasStack ? Math.round(sum * 100) / 100 : Number.isFinite(flat) ? flat : null,
+          breakdown: hasStack ? { ...lines, fob: round2(lines.manufacture || 0) + (lines.packaging || 0) } : null,
           rrp: Number.isFinite(rrp) ? rrp : null,
           notes: notesInput.value.trim(),
         });
@@ -272,3 +431,5 @@ function editProduct(p) {
 
   sheet(isNew ? 'Add a product' : displayName(p), body, { actions });
 }
+
+const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;

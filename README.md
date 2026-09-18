@@ -47,10 +47,16 @@ whole model. Settings writes that template for you. See
 [`docs/DATA.md`](docs/DATA.md).
 
 ### Products
-The full catalogue with each product's landed cost, its cost stack (manufacture,
-freight, insurance, duty, import VAT) and margin at RRP — plus what the margin
-becomes at each of your discount tiers. Costs are editable and you can add
-products the catalogue doesn't have.
+Every product carries the whole Unit Economics table from the financial model.
+Tap one and you get the landed cost built up line by line — manufacture,
+packaging, FOB, transport CN→LU and LU→ES, insurance, duty, import VAT — with a
+bar showing what share of the cost is making, shipping and tax. Below that, the
+price ladder: retail, sale, collab and distributor, each with the VAT that comes
+out, the commission, the profit and the margin left, plus the break-even price
+and how many units a month cover fixed costs.
+
+Every line is editable, so a freight rise or a new quote from Sobike can be tried
+on and the margins move with it.
 
 ### Sales
 Log a sale by hand or build it from products; the app derives net, VAT, cost and

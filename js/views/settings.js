@@ -29,6 +29,9 @@ export default function settingsView({ navigate }) {
   wrap.appendChild(sectionTitle('Pricing defaults'));
   wrap.appendChild(defaultsPanel(data));
 
+  wrap.appendChild(sectionTitle('Unit economics'));
+  wrap.appendChild(economicsPanel(data, navigate));
+
   wrap.appendChild(sectionTitle('Discount presets'));
   wrap.appendChild(presetsPanel(data));
 
@@ -258,6 +261,78 @@ function copyTemplate() {
   const csv = figuresTemplateCsv();
   downloadBlob(new Blob([csv], { type: 'text/csv' }), 'la-fuga-figures-template.csv');
   toast('Template saved — open it in Sheets and publish as CSV.');
+}
+
+/* ---------------------------------------------------------- unit economics */
+
+function economicsPanel(data, navigate) {
+  const s = data.settings;
+  const bind = (node, apply) => {
+    node.addEventListener('change', () => {
+      update((d) => apply(d.settings, node.value));
+      toast('Saved.');
+    });
+    return node;
+  };
+  const rate = (value, apply, hint) =>
+    field(hint.label, bind(input({ type: 'number', inputmode: 'decimal', step: '1', value: toPercentInput(value) }), apply), hint.note);
+
+  const reclaim = el('input', { type: 'checkbox', checked: s.reclaimImportVat });
+  reclaim.addEventListener('change', () => {
+    update((d) => {
+      d.settings.reclaimImportVat = reclaim.checked;
+    });
+    toast(reclaim.checked ? 'Import VAT excluded from cost.' : 'Import VAT counted in cost.');
+    navigate('#/settings');
+  });
+
+  return card(
+    el(
+      'p',
+      { class: 'prose' },
+      'The assumptions behind every product\u2019s margin. These drive the price ladder on each product, not the quotation builder.',
+    ),
+    el(
+      'div',
+      { class: 'field-grid' },
+      rate(s.saleDiscount, (set, v) => {
+        set.saleDiscount = toFraction(v);
+      }, { label: 'Sale discount %' }),
+      rate(s.collabDiscount, (set, v) => {
+        set.collabDiscount = toFraction(v);
+      }, { label: 'Collab discount %' }),
+    ),
+    el(
+      'div',
+      { class: 'field-grid' },
+      rate(s.distributorDiscount, (set, v) => {
+        set.distributorDiscount = toFraction(v);
+      }, { label: 'Distributor %' }),
+      rate(s.incomeTaxRate, (set, v) => {
+        set.incomeTaxRate = toFraction(v);
+      }, { label: 'Corporation tax %' }),
+    ),
+    el(
+      'label',
+      { class: 'switch-row' },
+      el(
+        'div',
+        {},
+        el('div', { class: 'switch-label' }, 'Import VAT is reclaimable'),
+        el(
+          'div',
+          { class: 'switch-hint' },
+          'La Fuga is VAT registered, so import VAT is input tax you get back. On = excluded from landed cost.',
+        ),
+      ),
+      reclaim,
+    ),
+    el(
+      'p',
+      { class: 'inline-note' },
+      'VAT and commission come from Pricing defaults above and are shared with quotations.',
+    ),
+  );
 }
 
 /* ----------------------------------------------------------------- defaults */

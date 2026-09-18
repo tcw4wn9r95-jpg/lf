@@ -35,6 +35,17 @@ export const DEFAULTS = Object.freeze({
     mode: 'margin',
     rounding: 1,
     commissionRate: 0.02,
+    /* Unit-economics assumptions, from the financial model's Suposiciones tab. */
+    saleDiscount: 0.05,
+    collabDiscount: 0.2,
+    distributorDiscount: 0.3,
+    insuranceRate: 0.05,
+    incomeTaxRate: 0.25,
+    /* Import VAT is reclaimable when VAT-registered; off keeps parity with the sheet. */
+    reclaimImportVat: false,
+    /* The VAT rate the financial model itself assumed, used only to explain how the
+       spreadsheet reached its numbers. Never used to price anything. */
+    modelVatRate: 0.21,
     quoteValidDays: 30,
     paymentTerms: '50% deposit to confirm the order, balance due before dispatch.',
     leadTime: '6–8 weeks from artwork sign-off.',

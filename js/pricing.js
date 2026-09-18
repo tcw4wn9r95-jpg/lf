@@ -153,3 +153,137 @@ function clampFraction(v) {
 }
 
 export { num as toNumber, round2 };
+
+/* ------------------------------------------------------- unit economics */
+
+/*
+ * The landed-cost stack, mirroring the Unit Economics tab of the financial model:
+ * manufacture and packaging make FOB, the logistics lines make the import cost,
+ * and together they make the DDP cost of one unit on the shelf.
+ */
+export const COST_LINES = [
+  { key: 'manufacture', label: 'Manufacture', group: 'production' },
+  { key: 'packaging', label: 'Packaging', group: 'production' },
+  { key: 'freightIn', label: 'Transport CN → LU', group: 'logistics' },
+  { key: 'freightOut', label: 'Transport LU → ES', group: 'logistics' },
+  { key: 'insurance', label: 'Insurance', group: 'logistics' },
+  { key: 'duty', label: 'Duty', group: 'logistics' },
+  { key: 'importVat', label: 'Import VAT', group: 'logistics' },
+];
+
+/** Add the stack up. Falls back to the flat `cost` when no breakdown was imported. */
+export function costStack(product, { reclaimImportVat = false } = {}) {
+  const b = product?.breakdown;
+  if (!b) {
+    const flat = num(product?.cost);
+    return { hasBreakdown: false, fob: flat, importCosts: 0, importVat: 0, landed: flat, lines: {} };
+  }
+
+  const lines = {};
+  COST_LINES.forEach(({ key }) => {
+    lines[key] = num(b[key]);
+  });
+
+  const fob = round2(lines.manufacture + lines.packaging);
+  const importCosts = round2(lines.freightIn + lines.freightOut + lines.insurance + lines.duty + lines.importVat);
+  // Import VAT is input tax: a VAT-registered company reclaims it, so it is a cash
+  // timing cost rather than a cost of goods. Off by default to match the sheet.
+  const recovered = reclaimImportVat ? lines.importVat : 0;
+
+  return {
+    hasBreakdown: true,
+    lines,
+    fob,
+    importCosts,
+    importVat: lines.importVat,
+    recovered,
+    landed: round2(fob + importCosts - recovered),
+    landedWithVat: round2(fob + importCosts),
+  };
+}
+
+/** The price ladder: retail, the standing sale discount, collab, distributor. */
+export function priceTiers(product, settings) {
+  const rrp = num(product?.rrp);
+  const distributor = Number.isFinite(product?.distributorDiscount)
+    ? product.distributorDiscount
+    : num(settings.distributorDiscount);
+
+  return [
+    { id: 'retail', label: 'Retail', discount: 0, gross: rrp },
+    { id: 'discount', label: 'Sale', discount: num(settings.saleDiscount), gross: round2(rrp * (1 - num(settings.saleDiscount))) },
+    { id: 'collab', label: 'Collab', discount: num(settings.collabDiscount), gross: round2(rrp * (1 - num(settings.collabDiscount))) },
+    { id: 'distributor', label: 'Distributor', discount: distributor, gross: round2(rrp * (1 - distributor)) },
+  ];
+}
+
+/**
+ * Everything needed to judge one product: the cost stack, and what each price tier
+ * actually leaves once VAT and platform commission come out.
+ *
+ * VAT is extracted from the gross price (gross x rate / (1 + rate)) — it is money
+ * collected for HMRC, never revenue. Commission is charged on the net.
+ */
+export function unitEconomics(product, settings) {
+  const stack = costStack(product, { reclaimImportVat: settings.reclaimImportVat });
+  const vatRate = num(settings.vatRate);
+  const commissionRate = num(settings.commissionRate);
+  const overheads = num(settings.monthlyOverheads);
+
+  const tiers = priceTiers(product, settings).map((tier) => {
+    const net = tier.gross / (1 + vatRate);
+    const vat = round2(tier.gross - net);
+    const commission = round2(net * commissionRate);
+    const profit = round2(net - commission - stack.landed);
+    return {
+      ...tier,
+      net: round2(net),
+      vat,
+      commission,
+      cost: stack.landed,
+      profit,
+      margin: net ? profit / net : 0,
+      markup: stack.landed ? profit / stack.landed : 0,
+      unitsForOverheads: profit > 0 ? Math.ceil(overheads / profit) : null,
+    };
+  });
+
+  // The gross price at which this product exactly washes its face.
+  const keptShare = (1 - commissionRate) / (1 + vatRate);
+  const floorGross = keptShare > 0 ? round2(stack.landed / keptShare) : 0;
+
+  return { stack, tiers, floorGross, vatRate, commissionRate };
+}
+
+/**
+ * How the model's own figures were reached, for the reconciliation note.
+ * The sheet takes VAT as a percentage OF the gross price rather than the VAT
+ * fraction of it, and charges commission against the collab price rather than the
+ * price being sold at — both understate profit.
+ */
+export function sheetComparison(product, settings) {
+  const gross = num(product?.rrp);
+  if (!gross) return null;
+  // The note describes the spreadsheet, so it has to use the rate the spreadsheet
+  // assumed — not whatever the app is currently set to for the market being sold in.
+  const vatRate = num(settings.modelVatRate) || num(settings.vatRate);
+  const landed = costStack(product).landedWithVat ?? num(product.cost);
+  const collabGross = gross * (1 - num(settings.collabDiscount));
+
+  const sheetVat = round2(gross * vatRate);
+  const sheetCommission = round2(collabGross * num(settings.commissionRate));
+  const sheetNet = round2(gross - landed - sheetCommission - sheetVat);
+
+  const economics = unitEconomics(product, settings);
+  const ours = economics.tiers[0].profit;
+
+  return {
+    sheetVat,
+    sheetCommission,
+    sheetNet,
+    ours,
+    modelVatRate: vatRate,
+    sameVatBasis: Math.abs(vatRate - num(settings.vatRate)) < 0.0001,
+    difference: round2(ours - sheetNet),
+  };
+}

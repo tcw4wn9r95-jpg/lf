@@ -89,7 +89,7 @@ One row per product. Column order does not matter and unknown columns are ignore
 | --- | --- |
 | `id` | Join key, from `js/catalog.js`. An unknown id creates a new product. |
 | `name` | Shown in the app. Used to derive an id if `id` is blank. |
-| `cost` | Landed unit cost, DDP, excluding VAT. **Required** — a row without one is skipped. |
+| `cost` | Landed unit cost, DDP. **Required** — a row without one is skipped. |
 | `rrp` | Retail price including VAT. |
 | `distributor_discount` | `25%` or `0.25`, both read the same. |
 | `code`, `category`, `maker` | Only used when the row creates a new product. |
@@ -100,6 +100,32 @@ One row per product. Column order does not matter and unknown columns are ignore
 
 Syncing **merges**: it updates the products the sheet mentions and leaves
 everything else — your quotations, sales, and any cost you typed by hand — alone.
+
+A CSV carries only the landed total. The full cost stack (manufacture, packaging,
+freight in and out, insurance, duty, import VAT) comes from the JSON file, under
+`breakdown`, and is what the product screen draws its table from.
+
+## Where the app and the spreadsheet disagree
+
+The app computes the stack itself rather than copying the model's answers, so on
+three points the numbers differ. All three make products look **more** profitable
+than the sheet does.
+
+1. **VAT.** The model takes VAT as 21% *of* the VAT-inclusive price. VAT inside a
+   gross price is `gross x rate / (1 + rate)` — so on a £116 jersey it is £20.13,
+   not £24.36. The sheet overstates VAT, and understates profit by the difference.
+2. **Commission.** The model charges the 2% platform fee against the *collab*
+   price rather than the price actually being sold at, which looks like a cell
+   reference pointing one column across.
+3. **Import VAT.** It sits inside landed cost. For a VAT-registered company it is
+   input tax and comes back, so it inflates the cost of every Sobike-made product
+   by about 14%. Settings has a switch — off by default, so the stack matches the
+   sheet until you decide otherwise.
+
+The product screen states the first two on the product itself, with both figures,
+so nothing is silently different. Landed cost can also land a penny off the
+model's DDP, because the app sums the components rather than carrying the sheet's
+rounded total.
 
 ## Backups
 
