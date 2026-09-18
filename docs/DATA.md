@@ -48,6 +48,59 @@ figures on purpose — none belong in this file either. In short:
 A file with `"kind": "lafuga-backup"` is a full export — figures plus quotations,
 sales, settings and ticked-off deadlines.
 
+## Keeping figures up to date
+
+Three routes, in order of how private they are.
+
+### 1. Import a file (nothing leaves your control)
+
+Settings -> **Import** takes a `.csv` as well as a JSON backup. On the iPhone the
+Files app can open Google Drive directly, so: export your sheet as CSV into Drive,
+then Import -> Browse -> Google Drive -> pick it. Four taps, nothing published.
+
+### 2. Sync from a published sheet (a price change reaches the phone on its own)
+
+Settings -> **Sync from a sheet** takes a link and pulls the figures in, with an
+optional hourly check when you open the app.
+
+**The catch:** a browser can only read a Google Sheet that has been published with
+**File -> Share -> Publish to web**, as CSV. A normal "anyone with the link" share
+redirects to a sign-in page, and Drive's direct-download URL sends no CORS headers
+at all — both are refused before the app sees them. Publishing means anyone
+holding that long URL can read the sheet.
+
+So publish a **separate sheet carrying only the columns below** — never your whole
+financial model with its margins, suppliers and overheads. Settings ->
+**Copy template** writes that sheet out for you, pre-filled with what the app
+already knows.
+
+The link itself is stored on the phone, not in this repository, so it is not
+exposed by the app being public.
+
+### 3. Paste JSON
+
+Settings -> **Paste figures instead**, for when you have the JSON to hand.
+
+## The sheet format
+
+One row per product. Column order does not matter and unknown columns are ignored.
+
+| Column | Meaning |
+| --- | --- |
+| `id` | Join key, from `js/catalog.js`. An unknown id creates a new product. |
+| `name` | Shown in the app. Used to derive an id if `id` is blank. |
+| `cost` | Landed unit cost, DDP, excluding VAT. **Required** — a row without one is skipped. |
+| `rrp` | Retail price including VAT. |
+| `distributor_discount` | `25%` or `0.25`, both read the same. |
+| `code`, `category`, `maker` | Only used when the row creates a new product. |
+| `notes` | Free text. |
+
+`£1,234.56`, `€1.234,56` and `(12.50)` for a negative all parse. Spanish headers
+(`Descripcion`, `Precio DDP`, `PVP`) are recognised too.
+
+Syncing **merges**: it updates the products the sheet mentions and leaves
+everything else — your quotations, sales, and any cost you typed by hand — alone.
+
 ## Backups
 
 **This is the only copy.** Clearing Safari's website data deletes it, and so does

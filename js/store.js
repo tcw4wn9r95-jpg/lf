@@ -48,6 +48,11 @@ export const DEFAULTS = Object.freeze({
     ],
     footerNote: '',
     lastBackupAt: null,
+    /* Figures sync. The link lives here, on the phone — never in the repository. */
+    syncUrl: '',
+    syncAuto: false,
+    lastSyncAt: null,
+    lastSyncSummary: '',
   },
   /* productId -> { cost, rrp, breakdown?, notes? }. Populated only by import. */
   financials: {},

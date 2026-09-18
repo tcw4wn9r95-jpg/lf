@@ -4,6 +4,7 @@
 import { load, subscribe } from './store.js';
 import { clear, closeAllSheets } from './ui.js';
 import { loadBrandFonts } from './fonts.js';
+import { maybeAutoSync } from './sync.js';
 
 import todayView from './views/today.js';
 import quotesView from './views/quotes.js';
@@ -94,6 +95,14 @@ render();
 // Resolve Gotham (or the bundled stand-in) early, so the first PDF export does not
 // have to wait on it.
 loadBrandFonts().catch((err) => console.warn('Font resolution failed', err));
+
+// Pull a newer set of figures in the background when one is configured. Failure is
+// never fatal — the figures already on the phone stay exactly as they were.
+maybeAutoSync()
+  .then((parsed) => {
+    if (parsed) render();
+  })
+  .catch((err) => console.warn('Auto-sync failed', err));
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   window.addEventListener('load', () => {

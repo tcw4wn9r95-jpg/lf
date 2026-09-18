@@ -4,6 +4,7 @@
 import { load, update, exportBundle, importBundle, wipe } from '../store.js';
 import { PROFILE_DEFAULTS, profile } from '../deadlines.js';
 import { ROUNDING, PRICING_MODES } from '../pricing.js';
+import { syncNow, parseFigures, applyFigures, syncUrlIsUsable, looksPublished, figuresTemplateCsv } from '../sync.js';
 import {
   el, card, sectionTitle, button, input, select, field, sheet, closeSheet, toast,
   toFraction, toPercentInput, downloadBlob, confirmSheet,
@@ -21,6 +22,9 @@ export default function settingsView({ navigate }) {
 
   wrap.appendChild(sectionTitle('Your figures'));
   wrap.appendChild(dataPanel(data, navigate));
+
+  wrap.appendChild(sectionTitle('Sync from a sheet'));
+  wrap.appendChild(syncPanel(data, navigate));
 
   wrap.appendChild(sectionTitle('Pricing defaults'));
   wrap.appendChild(defaultsPanel(data));
@@ -59,14 +63,22 @@ function dataPanel(data, navigate) {
   const financialCount = Object.keys(data.financials).length;
   const fileInput = el('input', {
     type: 'file',
-    accept: 'application/json,.json',
+    accept: 'application/json,text/csv,.json,.csv',
     style: { display: 'none' },
     onchange: async (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
       try {
-        const summary = importBundle(await file.text());
-        toast(`Imported ${summary.financials} products, ${summary.quotes} quotes, ${summary.sales} sales.`);
+        const text = await file.text();
+        // A CSV straight out of Sheets and a JSON backup both land here; tell them
+        // apart by content rather than by the extension, which Files often drops.
+        if (/\.csv$/i.test(file.name) || !text.trim().startsWith('{')) {
+          const parsed = applyFigures(parseFigures(text));
+          toast(`Imported ${parsed.rows} products${parsed.skipped.length ? `, ${parsed.skipped.length} skipped` : ''}.`);
+        } else {
+          const summary = importBundle(text);
+          toast(`Imported ${summary.financials} products, ${summary.quotes} quotes, ${summary.sales} sales.`);
+        }
         // This screen opts out of auto-redraw, so refresh it by hand.
         navigate('#/settings');
       } catch (err) {
@@ -109,7 +121,7 @@ function dataPanel(data, navigate) {
     el(
       'p',
       { class: 'inline-note' },
-      'Importing merges: it tops up what is here rather than replacing it. Export regularly — this is the only copy.',
+      'Takes a JSON backup or a CSV of figures. Importing merges: it tops up what is here rather than replacing it. Export regularly — this is the only copy.',
     ),
   );
 }
@@ -133,6 +145,119 @@ function pasteSheet(onDone) {
       }),
     ],
   });
+}
+
+/* --------------------------------------------------------------------- sync */
+
+function syncPanel(data, navigate) {
+  const s = data.settings;
+  const urlInput = input({
+    type: 'url',
+    value: s.syncUrl || '',
+    placeholder: 'https://docs.google.com/spreadsheets/d/e/…/pub?output=csv',
+    autocapitalize: 'off',
+    autocorrect: 'off',
+    spellcheck: false,
+  });
+
+  const status = el(
+    'p',
+    { class: 'inline-note' },
+    s.lastSyncAt
+      ? `Last synced ${new Date(s.lastSyncAt).toLocaleString('en-GB')} — ${s.lastSyncSummary || 'ok'}.`
+      : 'Never synced.',
+  );
+
+  const autoBox = el('input', { type: 'checkbox', checked: s.syncAuto });
+  autoBox.addEventListener('change', () => {
+    update((d) => {
+      d.settings.syncAuto = autoBox.checked;
+    });
+    toast(autoBox.checked ? 'Will check on open, hourly at most.' : 'Auto-sync off.');
+  });
+
+  const run = async (button) => {
+    const url = urlInput.value.trim();
+    if (!url) return toast('Paste the published CSV link first.', 'alert');
+    if (!syncUrlIsUsable(url)) return toast('That is not an https link.', 'alert');
+
+    update((d) => {
+      d.settings.syncUrl = url;
+    });
+
+    button.disabled = true;
+    button.textContent = 'Syncing…';
+    try {
+      const parsed = await syncNow(url);
+      toast(`Synced ${parsed.rows} products.`);
+      if (parsed.errors.length) console.warn('Sync notes:', parsed.errors);
+      navigate('#/settings');
+    } catch (err) {
+      console.error(err);
+      toast(err.message || 'Sync failed.', 'alert');
+      button.disabled = false;
+      button.textContent = 'Sync now';
+    }
+  };
+
+  const syncButton = button('Sync now', { variant: 'primary' });
+  syncButton.addEventListener('click', () => run(syncButton));
+
+  const warning = el('div', { class: 'hint-block' });
+  const drawWarning = () => {
+    const url = urlInput.value.trim();
+    // replaceChildren is the raw DOM API and stringifies null, so filter first.
+    const parts = [
+      el('strong', {}, 'This makes the sheet public. '),
+      'A browser can only read a Google Sheet that is published with File \u2192 Share \u2192 Publish to web. Anyone holding that link can read it, so publish a separate sheet carrying only the columns in the template \u2014 not your whole financial model.',
+    ];
+    if (url && !looksPublished(url)) {
+      parts.push(
+        el(
+          'p',
+          { class: 'inline-note text-alert', style: { marginTop: '8px' } },
+          'That does not look like a published-to-web link. A normal share link will be refused by the browser.',
+        ),
+      );
+    }
+    warning.replaceChildren(...parts);
+  };
+  urlInput.addEventListener('input', drawWarning);
+  drawWarning();
+
+  return card(
+    el(
+      'p',
+      { class: 'prose' },
+      'Keep your costs in a sheet and the app can pull them in, so a price change reaches the phone on its own.',
+    ),
+    warning,
+    field('Published CSV link', urlInput, 'Stored on this phone only — never in the app\u2019s code'),
+    el('div', { class: 'btn-row' }, syncButton, button('Copy template', { onclick: copyTemplate })),
+    el(
+      'label',
+      { class: 'switch-row' },
+      el(
+        'div',
+        {},
+        el('div', { class: 'switch-label' }, 'Check on open'),
+        el('div', { class: 'switch-hint' }, 'At most once an hour, and never offline'),
+      ),
+      autoBox,
+    ),
+    status,
+    el(
+      'p',
+      { class: 'inline-note' },
+      'Prefer to keep it private? Skip the link and use Import above — the Files app can open a CSV straight out of Google Drive.',
+    ),
+  );
+}
+
+function copyTemplate() {
+  const csv = figuresTemplateCsv();
+  downloadBlob(new Blob([csv], { type: 'text/csv' }), 'la-fuga-figures-template.csv');
+  toast('Template saved — open it in Sheets and publish as CSV.');
 }
 
 /* ----------------------------------------------------------------- defaults */

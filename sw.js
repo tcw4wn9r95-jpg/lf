@@ -9,7 +9,7 @@
  * through here.
  */
 
-const CACHE = 'lafuga-v2';
+const CACHE = 'lafuga-v3';
 
 const SHELL = [
   './',
@@ -33,6 +33,7 @@ const SHELL = [
   './js/pricing.js',
   './js/pdf.js',
   './js/fonts.js',
+  './js/sync.js',
   './js/deadlines.js',
   './js/views/today.js',
   './js/views/quotes.js',

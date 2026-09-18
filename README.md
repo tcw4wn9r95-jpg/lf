@@ -38,6 +38,14 @@ Export produces an A4 PDF: the logo lockup, your company and VAT details, the cl
 the line table, totals and terms, in the brand's black-and-white editorial style.
 It is generated on the phone, so it works offline and nothing is uploaded.
 
+### Keeping figures current
+Import a CSV (the Files app reaches Google Drive directly), or point the app at a
+Google Sheet published as CSV and let it pull changes in on its own. The sheet has
+to be *published to web* for a browser to read it at all, which makes it public to
+anyone with the link — so publish a small sheet of just the cost columns, not your
+whole model. Settings writes that template for you. See
+[`docs/DATA.md`](docs/DATA.md).
+
 ### Products
 The full catalogue with each product's landed cost, its cost stack (manufacture,
 freight, insurance, duty, import VAT) and margin at RRP — plus what the margin
@@ -72,6 +80,7 @@ js/
   store.js              localStorage schema, import/export
   catalog.js            products — names only, no money
   pricing.js            margin/markup/discount/VAT maths
+  sync.js               CSV parsing and the pull-from-a-sheet route
   pdf.js                the branded quotation
   fonts.js              resolves Gotham/Hakira, falls back to the stand-in
   deadlines.js          UK filing rules engine
