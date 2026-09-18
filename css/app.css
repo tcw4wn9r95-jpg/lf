@@ -1,10 +1,35 @@
 /*
  * La Fuga — visual system.
  *
- * The brand is a black Didone wordmark on white, so the app is the same: paper,
- * ink, hairlines, and the display serif reserved for headings and figures. No
- * accent colour anywhere except the two states that must shout — overdue and loss.
+ * The brand is a black Didone lockup on white, so the app is the same: paper,
+ * ink, hairlines, and Gotham for everything set as type. No accent colour anywhere
+ * except the two states that must shout — overdue and loss.
+ *
+ * Gotham and Hakira are licensed and are not distributed with this app. Drop the
+ * .ttf files into assets/fonts/ with a fonts.json naming them and js/fonts.js
+ * swaps them in at runtime; see assets/fonts/README.md.
  */
+
+/*
+ * The bundled stand-in is declared under the brand family names, so the interface
+ * is correct on first paint. When assets/fonts/fonts.json names real Gotham or
+ * Hakira files, js/fonts.js loads them and registers them over these at runtime.
+ */
+@font-face {
+  font-family: 'Gotham Brand';
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url('../assets/fonts/LaFugaSans-Regular.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Gotham Brand';
+  font-weight: 500 700;
+  font-style: normal;
+  font-display: swap;
+  src: url('../assets/fonts/LaFugaSans-SemiBold.ttf') format('truetype');
+}
 
 :root {
   --paper: #fbfaf8;
@@ -17,8 +42,8 @@
   --alert: #a4262c;
   --good: #1f6f4a;
 
-  --display: 'Playfair Display', 'Times New Roman', Times, serif;
-  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --sans: 'Gotham Brand', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --display: 'Hakira Brand', 'Gotham Brand', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
 
   --gutter: 20px;
   --radius: 14px;
@@ -67,7 +92,7 @@ a { color: inherit; text-decoration: none; }
 }
 
 .brand { display: flex; align-items: center; }
-.brand-mark { height: 22px; width: auto; display: block; }
+.brand-mark { height: 38px; width: auto; display: block; }
 
 .topbar-action {
   appearance: none;
@@ -92,9 +117,10 @@ a { color: inherit; text-decoration: none; }
 
 .page-title {
   font-family: var(--display);
-  font-size: 30px;
+  font-size: 29px;
   line-height: 1.15;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
+  font-weight: 500;
   margin-bottom: 4px;
 }
 
@@ -114,7 +140,7 @@ a { color: inherit; text-decoration: none; }
 
 .section-title {
   font-size: 11px;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--ink-3);
   font-weight: 600;
@@ -159,7 +185,7 @@ a { color: inherit; text-decoration: none; }
 
 .stat-label {
   font-size: 10.5px;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--ink-3);
   font-weight: 600;
@@ -167,9 +193,10 @@ a { color: inherit; text-decoration: none; }
 
 .stat-value {
   font-family: var(--display);
-  font-size: 25px;
+  font-size: 24px;
   line-height: 1.1;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
+  font-weight: 500;
   overflow-wrap: anywhere;
 }
 
@@ -199,7 +226,7 @@ a { color: inherit; text-decoration: none; }
 .row-main { flex: 1; min-width: 0; }
 .row-title { font-size: 15px; line-height: 1.3; }
 .row-sub { font-size: 12.5px; color: var(--ink-3); margin-top: 2px; }
-.row-value { font-family: var(--display); font-size: 17px; white-space: nowrap; }
+.row-value { font-family: var(--display); font-size: 16px; font-weight: 500; letter-spacing: -0.01em; white-space: nowrap; }
 .row-value-sub { font-size: 11.5px; color: var(--ink-3); text-align: right; margin-top: 2px; }
 .row-end { display: flex; flex-direction: column; align-items: flex-end; }
 
@@ -215,7 +242,7 @@ a { color: inherit; text-decoration: none; }
 
 .list-group-label {
   font-size: 10.5px;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--ink-3);
   font-weight: 600;
@@ -229,7 +256,7 @@ a { color: inherit; text-decoration: none; }
 .pill {
   display: inline-block;
   font-size: 10.5px;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   font-weight: 600;
   padding: 3px 8px;
@@ -276,7 +303,7 @@ a { color: inherit; text-decoration: none; }
 .field-label {
   display: block;
   font-size: 11px;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--ink-3);
   font-weight: 600;
@@ -424,7 +451,7 @@ select.input {
   padding: 16px var(--gutter) 12px;
   border-bottom: 1px solid var(--hairline);
 }
-.sheet-head h2 { font-family: var(--display); font-size: 20px; }
+.sheet-head h2 { font-family: var(--display); font-size: 19px; font-weight: 500; letter-spacing: -0.01em; }
 .sheet-head .btn { border-color: transparent; color: var(--ink-2); padding: 6px 4px; min-height: 36px; }
 
 .sheet-body {
@@ -470,7 +497,7 @@ select.input {
 .ledger th {
   text-align: right;
   font-size: 10px;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--ink-3);
   font-weight: 600;
@@ -480,7 +507,7 @@ select.input {
 .ledger th:first-child, .ledger td:first-child { text-align: left; }
 .ledger td { text-align: right; padding: 9px 0; border-bottom: 1px solid var(--hairline); }
 .ledger tr:last-child td { border-bottom: 0; }
-.ledger .is-total td { font-family: var(--display); font-size: 16px; border-top: 1px solid var(--hairline-strong); border-bottom: 0; padding-top: 12px; }
+.ledger .is-total td { font-family: var(--display); font-size: 16px; font-weight: 500; border-top: 1px solid var(--hairline-strong); border-bottom: 0; padding-top: 12px; }
 .ledger .is-alert { color: var(--alert); }
 .ledger .is-good { color: var(--good); }
 

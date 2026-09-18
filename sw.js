@@ -9,7 +9,7 @@
  * through here.
  */
 
-const CACHE = 'lafuga-v1';
+const CACHE = 'lafuga-v2';
 
 const SHELL = [
   './',
@@ -18,7 +18,10 @@ const SHELL = [
   './css/app.css',
   './vendor/jspdf.umd.min.js',
   './assets/brand-marks.js',
-  './assets/wordmark-black.png',
+  './assets/font-fallback.js',
+  './assets/fonts/LaFugaSans-Regular.ttf',
+  './assets/fonts/LaFugaSans-SemiBold.ttf',
+  './assets/lockup-black.png',
   './assets/icon-180.png',
   './assets/icon-192.png',
   './assets/icon-512.png',
@@ -29,6 +32,7 @@ const SHELL = [
   './js/catalog.js',
   './js/pricing.js',
   './js/pdf.js',
+  './js/fonts.js',
   './js/deadlines.js',
   './js/views/today.js',
   './js/views/quotes.js',
@@ -63,7 +67,7 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return;
 
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin) return; // Web fonts fall back to system faces.
+  if (url.origin !== self.location.origin) return; // Everything the app needs is same-origin.
 
   // Navigations come from the cached shell first so a cold, offline launch works.
   if (request.mode === 'navigate') {

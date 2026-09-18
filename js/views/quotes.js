@@ -4,6 +4,7 @@ import { CATEGORIES, displayName } from '../catalog.js';
 import { load, products, saveQuote, deleteQuote, nextQuoteRef, uid, saveSale } from '../store.js';
 import { priceQuote, PRICING_MODES, ROUNDING, breakEvenDiscount } from '../pricing.js';
 import { buildQuotePdf, quoteFilename } from '../pdf.js';
+import { loadBrandFonts } from '../fonts.js';
 import {
   el, card, sectionTitle, empty, button, input, select, field, sheet, closeSheet, toast,
   currency, percent, toFraction, toPercentInput, todayIso, addDays, confirmSheet, downloadBlob,
@@ -671,9 +672,11 @@ function editLine(quote, index, onChange) {
 
 /* --------------------------------------------------------------------- output */
 
-function exportPdf(quote) {
+async function exportPdf(quote) {
   const { company, settings } = load();
   try {
+    // Usually resolved at startup; awaiting here covers a very fast first export.
+    await loadBrandFonts();
     const doc = buildQuotePdf({ quote, company, settings });
     const filename = quoteFilename(quote, company);
     // Safari on iOS ignores the download attribute for blobs in some versions, so

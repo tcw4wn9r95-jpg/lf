@@ -1,15 +1,17 @@
 /*
  * Branded quotation PDF.
  *
- * The brand is monochrome and editorial: the Didone wordmark does the talking,
- * everything else is a neutral grotesque, hairline rules, and a lot of white space.
- * No fills, no colour, no boxes — the restraint is the identity.
+ * The brand is monochrome and editorial: the Didone lockup does the talking,
+ * everything else is Gotham, hairline rules, and a lot of white space. No fills,
+ * no colour, no boxes — the restraint is the identity.
  *
- * Built with jsPDF's built-in Helvetica so a quote renders identically on a phone
- * with no network, and the wordmark is embedded as data so it can never 404.
+ * The logo is embedded as data and the typeface is embedded as bytes, so a quote
+ * renders identically on a phone with no network and never depends on a font
+ * being installed wherever the client opens it.
  */
 
-import { WORDMARK_PNG, WORDMARK_ASPECT } from '../assets/brand-marks.js';
+import { LOCKUP_PNG, LOCKUP_ASPECT } from '../assets/brand-marks.js';
+import { registerPdfFonts } from './fonts.js';
 import { priceQuote } from './pricing.js';
 import { fmtDate } from './deadlines.js';
 
@@ -47,6 +49,7 @@ export const pct = (v, dp = 0) => `${(v * 100).toFixed(dp)}%`;
 export function buildQuotePdf({ quote, company, settings }) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit: 'pt', format: 'a4', compress: true });
+  FAMILY = registerPdfFonts(doc).family;
   const totals = priceQuote(quote);
   const cur = quote.currency || settings.currency || 'GBP';
 
@@ -77,19 +80,15 @@ export function quoteFilename(quote, company) {
 /* ------------------------------------------------------------------- sections */
 
 function masthead(doc, quote, company) {
-  const logoW = 116;
-  const logoH = logoW / WORDMARK_ASPECT;
-  doc.addImage(WORDMARK_PNG, 'PNG', M.left, M.top, logoW, logoH);
-
-  if (company.tradingName) {
-    setType(doc, 6.5, 'normal', MUTED);
-    doc.text(tracked(company.tradingName.toUpperCase(), 1.6), M.left + 2, M.top + logoH + 12);
-  }
+  // The lockup carries "cycling society" itself — never set it as type alongside.
+  const logoW = 128;
+  const logoH = logoW / LOCKUP_ASPECT;
+  doc.addImage(LOCKUP_PNG, 'PNG', M.left, M.top, logoW, logoH);
 
   // Right-hand meta column, right-aligned against the margin.
   const x = PAGE.w - M.right;
-  setType(doc, 8, 'bold', INK);
-  doc.text(tracked('QUOTATION', 2.4), x, M.top + 9, { align: 'right' });
+  setType(doc, 9, 'bold', INK);
+  doc.text('QUOTATION', x, M.top + 9, { align: 'right' });
 
   const rows = [
     ['Reference', quote.ref],
@@ -108,7 +107,7 @@ function masthead(doc, quote, company) {
     ry += 12.5;
   });
 
-  const y = Math.max(M.top + logoH + 24, ry + 4);
+  const y = Math.max(M.top + logoH + 20, ry + 4);
   rule(doc, y, RULE_STRONG, 0.8);
   return y + 24;
 }
@@ -213,9 +212,9 @@ function lineTable(doc, y, totals, cur, quote) {
 
 /** Masthead for pages after the first: the mark, quietly, plus the reference. */
 function continuationHead(doc, quote) {
-  const logoW = 62;
-  const logoH = logoW / WORDMARK_ASPECT;
-  doc.addImage(WORDMARK_PNG, 'PNG', M.left, M.top, logoW, logoH);
+  const logoW = 70;
+  const logoH = logoW / LOCKUP_ASPECT;
+  doc.addImage(LOCKUP_PNG, 'PNG', M.left, M.top, logoW, logoH);
   setType(doc, 7, 'normal', MUTED);
   doc.text(`Quotation ${quote.ref} \u00B7 continued`, M.left + CONTENT_W, M.top + logoH - 2, { align: 'right' });
   const y = M.top + logoH + 12;
@@ -225,11 +224,11 @@ function continuationHead(doc, quote) {
 
 function tableHead(doc, y, c) {
   setType(doc, 7, 'bold', MUTED);
-  doc.text(tracked('ITEM', 1.4), c.item, y);
-  doc.text(tracked('QTY', 1.4), c.qty, y, { align: 'right' });
-  doc.text(tracked('UNIT', 1.4), c.unit, y, { align: 'right' });
-  if (c.showDiscount) doc.text(tracked('DISC', 1.4), c.disc, y, { align: 'right' });
-  doc.text(tracked('AMOUNT', 1.4), c.amount, y, { align: 'right' });
+  doc.text('ITEM', c.item, y);
+  doc.text('QTY', c.qty, y, { align: 'right' });
+  doc.text('UNIT', c.unit, y, { align: 'right' });
+  if (c.showDiscount) doc.text('DISC', c.disc, y, { align: 'right' });
+  doc.text('AMOUNT', c.amount, y, { align: 'right' });
   rule(doc, y + 8, RULE_STRONG, 0.8);
   return y + 16;
 }
@@ -272,7 +271,7 @@ function totalsBlock(doc, y, totals, cur, quote) {
   y += 17;
 
   setType(doc, 8, 'bold', INK);
-  doc.text(tracked('TOTAL', 2), labelX, y);
+  doc.text('TOTAL', labelX, y);
   setType(doc, 15, 'bold', INK);
   doc.text(money(totals.total, cur), x, y + 1, { align: 'right' });
 
@@ -340,15 +339,18 @@ function footers(doc, company) {
 
 /* --------------------------------------------------------------------- drawing */
 
+/* Set by buildQuotePdf once the fonts are registered on the document. */
+let FAMILY = 'helvetica';
+
 function setType(doc, size, weight, color) {
-  doc.setFont('helvetica', weight);
+  doc.setFont(FAMILY, weight);
   doc.setFontSize(size);
   doc.setTextColor(...color);
 }
 
 function label(doc, text, x, y) {
   setType(doc, 6.5, 'bold', MUTED);
-  doc.text(tracked(text.toUpperCase(), 1.6), x, y);
+  doc.text(text.toUpperCase(), x, y);
 }
 
 function rule(doc, y, color, width) {
@@ -362,16 +364,6 @@ function wrap(doc, text, x, y, width, leading) {
   const lines = doc.splitTextToSize(String(text), width);
   lines.forEach((line, i) => doc.text(line, x, y + i * leading));
   return y + (lines.length - 1) * leading + leading;
-}
-
-/**
- * jsPDF has no letter-spacing for built-in fonts, so space the glyphs by hand.
- * Only used on short uppercase labels, where it reads as intent rather than a hack.
- */
-function tracked(text, amount) {
-  if (!amount) return text;
-  const gap = amount > 2 ? '  ' : ' ';
-  return text.split('').join(gap);
 }
 
 function splitLines(value) {

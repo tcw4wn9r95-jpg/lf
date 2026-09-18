@@ -3,6 +3,7 @@
 
 import { load, subscribe } from './store.js';
 import { clear, closeAllSheets } from './ui.js';
+import { loadBrandFonts } from './fonts.js';
 
 import todayView from './views/today.js';
 import quotesView from './views/quotes.js';
@@ -89,6 +90,10 @@ subscribe(() => {
 
 load();
 render();
+
+// Resolve Gotham (or the bundled stand-in) early, so the first PDF export does not
+// have to wait on it.
+loadBrandFonts().catch((err) => console.warn('Font resolution failed', err));
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   window.addEventListener('load', () => {

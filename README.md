@@ -34,7 +34,7 @@ Change VAT, apply a discount to the whole quote or to one line, and the panel
 underneath keeps showing what you actually earn. A 10% club discount on a 45%
 margin quote shows up immediately as 37%, and any line pushed below cost goes red.
 
-Export produces an A4 PDF: the wordmark, your company and VAT details, the client,
+Export produces an A4 PDF: the logo lockup, your company and VAT details, the client,
 the line table, totals and terms, in the brand's black-and-white editorial style.
 It is generated on the phone, so it works offline and nothing is uploaded.
 
@@ -73,9 +73,11 @@ js/
   catalog.js            products — names only, no money
   pricing.js            margin/markup/discount/VAT maths
   pdf.js                the branded quotation
+  fonts.js              resolves Gotham/Hakira, falls back to the stand-in
   deadlines.js          UK filing rules engine
   views/                one module per screen
-assets/                 wordmark, monogram, app icons
+assets/                 logo lockup, monogram, app icons
+assets/fonts/           bundled stand-in; your licensed faces go here
 vendor/jspdf.umd.min.js PDF generation (MIT), vendored so it works offline
 data/figures.example.json  shape of the private figures file
 docs/DATA.md            what lives where, and how to back it up
@@ -83,11 +85,17 @@ docs/DATA.md            what lives where, and how to back it up
 
 ## Brand
 
-Black wordmark, off-white paper, hairline rules, and Playfair Display for
-headings and figures against a neutral sans for everything else. There is no
-accent colour: the only two that appear are for an overdue date and a loss-making
-line. The PDF uses the same system, with the logo embedded as data so a quote
-looks identical whether it is opened on a phone, printed, or forwarded.
+The logo lockup, off-white paper, hairline rules, and **Gotham** throughout, with
+**Hakira** on headline figures. No accent colour: the only two that appear are for
+an overdue date and a loss-making line. The PDF uses the same system, with the
+logo embedded as data and the typeface embedded as bytes, so a quote looks
+identical whether it is opened on a phone, printed, or forwarded.
+
+Gotham and Hakira are licensed and are **not** in this repository. Drop your `.ttf`
+files into `assets/fonts/` with a `fonts.json` naming them and the app swaps them
+in — interface and PDF both. Until then it uses a subsetted Montserrat (OFL), a
+geometric sans cut close enough to Gotham that nothing reads wrong. Details in
+[`assets/fonts/README.md`](assets/fonts/README.md).
 
 ## Backups
 

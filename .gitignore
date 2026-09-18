@@ -11,3 +11,8 @@ data/*.json
 .DS_Store
 node_modules/
 *.log
+
+# Licensed brand faces — never redistribute these from a public repo.
+assets/fonts/Gotham*
+assets/fonts/Hakira*
+assets/fonts/fonts.json
