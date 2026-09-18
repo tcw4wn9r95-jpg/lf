@@ -2,14 +2,27 @@
  * Offline cache.
  *
  * The app has to work in a warehouse, on a plane, or anywhere with no signal, so
- * every file it needs is precached on install. Bump CACHE when shipping changes —
- * old caches are dropped on activate.
+ * every file it needs is precached on install.
+ *
+ * Strategy matters more than it looks. App code is served **network-first**: when
+ * there is signal you always get the deployed version, and the cache is only a
+ * fallback for when there isn't. Cache-first was the obvious choice and the wrong
+ * one — it pinned phones to whatever shipped first and made every later deploy
+ * invisible until the cache name happened to change.
+ *
+ * Images and fonts stay cache-first. They are large, they rarely change, and a
+ * round trip for them on every launch is waste.
+ *
+ * VERSION must change on every deploy or the old cache is kept and the old shell
+ * with it. `npm run release` (scripts/release.sh) bumps it together with
+ * js/version.js so the two cannot drift apart.
  *
  * Only app code is cached. Business data lives in localStorage and never passes
  * through here.
  */
 
-const CACHE = 'lafuga-v3';
+const VERSION = '2026.09.18-4';
+const CACHE = `lafuga-${VERSION}`;
 
 const SHELL = [
   './',
@@ -34,6 +47,7 @@ const SHELL = [
   './js/pdf.js',
   './js/fonts.js',
   './js/sync.js',
+  './js/version.js',
   './js/deadlines.js',
   './js/views/today.js',
   './js/views/quotes.js',
@@ -42,6 +56,9 @@ const SHELL = [
   './js/views/dates.js',
   './js/views/settings.js',
 ];
+
+/** Files that must always reflect the deployed version when there is a network. */
+const CODE = /\.(?:html|js|mjs|css|json|webmanifest)$/i;
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -63,6 +80,10 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+self.addEventListener('message', (event) => {
+  if (event.data === 'skip-waiting') self.skipWaiting();
+});
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
@@ -70,27 +91,43 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return; // Everything the app needs is same-origin.
 
-  // Navigations come from the cached shell first so a cold, offline launch works.
-  if (request.mode === 'navigate') {
-    event.respondWith(
-      caches.match('./index.html').then((cached) => cached || fetch(request)),
-    );
-    return;
-  }
-
-  event.respondWith(
-    caches.match(request).then((cached) => {
-      const network = fetch(request)
-        .then((response) => {
-          if (response.ok) {
-            const copy = response.clone();
-            caches.open(CACHE).then((cache) => cache.put(request, copy));
-          }
-          return response;
-        })
-        .catch(() => cached);
-      // Serve what we have immediately and refresh it in the background.
-      return cached || network;
-    }),
-  );
+  const isCode = request.mode === 'navigate' || CODE.test(url.pathname);
+  event.respondWith(isCode ? networkFirst(request) : cacheFirst(request));
 });
+
+/** Deployed version wins; the cache catches us when the network does not answer. */
+async function networkFirst(request) {
+  try {
+    const response = await fetch(request);
+    if (response && response.ok) {
+      const copy = response.clone();
+      caches.open(CACHE).then((cache) => cache.put(request, copy));
+    }
+    return response;
+  } catch {
+    const cached = await caches.match(request);
+    if (cached) return cached;
+    // A deep link opened offline still has to render: fall back to the shell and
+    // let the hash router take it from there.
+    if (request.mode === 'navigate') {
+      const shell = await caches.match('./index.html');
+      if (shell) return shell;
+    }
+    throw new Error('Offline and not cached');
+  }
+}
+
+/** Big, stable files: serve from cache and quietly refresh for next time. */
+async function cacheFirst(request) {
+  const cached = await caches.match(request);
+  const network = fetch(request)
+    .then((response) => {
+      if (response && response.ok) {
+        const copy = response.clone();
+        caches.open(CACHE).then((cache) => cache.put(request, copy));
+      }
+      return response;
+    })
+    .catch(() => cached);
+  return cached || network;
+}

@@ -121,6 +121,22 @@ in — interface and PDF both. Until then it uses a subsetted Montserrat (OFL), 
 geometric sans cut close enough to Gotham that nothing reads wrong. Details in
 [`assets/fonts/README.md`](assets/fonts/README.md).
 
+## Releasing
+
+`scripts/release.sh` bumps the build stamp in `js/version.js` and `sw.js`
+together, then commit and push. **Do not skip it.** The service worker keeps a
+cache named after that version and drops every other one when it activates; leave
+the version alone and phones keep serving the previous deploy. Settings shows the
+running version, so "am I on the latest?" is answerable rather than guessable.
+
+App code is served network-first, so with signal you always get what is deployed
+and the cache is only the offline fallback. Images and fonts stay cache-first —
+large, stable, and not worth a round trip on every launch.
+
+A phone already running an older build picks the new one up on the **second**
+open: the first still runs the old code, which has no reload logic, while the new
+worker installs behind it. From then on updates land on the next open.
+
 ## Backups
 
 The app is the only copy of your data. Settings → **Export backup** writes a dated

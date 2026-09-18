@@ -105,7 +105,24 @@ maybeAutoSync()
   .catch((err) => console.warn('Auto-sync failed', err));
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  // A page already under a service worker gets the new code the moment a new
+  // worker takes over. Without this a deploy sits behind the old cache until the
+  // app happens to be killed and relaunched.
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    // The first registration also fires this; only an actual swap should reload.
+    if (!hadController || reloading) return;
+    reloading = true;
+    location.reload();
+  });
+
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch((err) => console.warn('Offline cache unavailable', err));
+    navigator.serviceWorker
+      // updateViaCache 'none' keeps the browser's HTTP cache out of the way, so a
+      // new worker is always noticed.
+      .register('sw.js', { updateViaCache: 'none' })
+      .then((registration) => registration.update())
+      .catch((err) => console.warn('Offline cache unavailable', err));
   });
 }

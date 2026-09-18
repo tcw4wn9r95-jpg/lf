@@ -2,6 +2,7 @@
  * import/export that keeps unit economics off the repository. */
 
 import { load, update, exportBundle, importBundle, wipe } from '../store.js';
+import { APP_VERSION } from '../version.js';
 import { PROFILE_DEFAULTS, profile } from '../deadlines.js';
 import { ROUNDING, PRICING_MODES } from '../pricing.js';
 import { syncNow, parseFigures, applyFigures, syncUrlIsUsable, looksPublished, figuresTemplateCsv } from '../sync.js';
@@ -18,7 +19,9 @@ export default function settingsView({ navigate }) {
   const wrap = el('div');
 
   wrap.appendChild(el('h1', { class: 'page-title' }, 'Settings'));
-  wrap.appendChild(el('p', { class: 'page-sub' }, 'Everything here stays on this phone.'));
+  wrap.appendChild(
+    el('p', { class: 'page-sub' }, `Everything here stays on this phone. \u00B7 Version ${APP_VERSION}`),
+  );
 
   wrap.appendChild(sectionTitle('Your figures'));
   wrap.appendChild(dataPanel(data, navigate));
