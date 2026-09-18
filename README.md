@@ -54,6 +54,29 @@ anyone with the link — so publish a small sheet of just the cost columns, not 
 whole model. Settings writes that template for you. See
 [`docs/DATA.md`](docs/DATA.md).
 
+### Custom products
+**Customise a product** takes an existing one, inherits its whole cost structure,
+and lets you add what this job needs on top — sublimation artwork, a pad upgrade,
+a woven label, artwork setup — as one-tap presets or your own lines. Set a markup
+and it reads straight down:
+
+```
+Landed cost · Men's Equinnox Jersey LS   £37.71
+Full sublimation artwork                  £4.50
+Woven neck label                          £0.30
+Elastic Interface pad upgrade             £6.00
+Club artwork setup                        £2.40
+Unit cost                                £50.91
+Markup at 150%                           £76.59
+Sale price excl. VAT                    £127.50
+VAT at 20%                               £25.50
+Sale price incl. VAT                    £153.00
+```
+
+with the profit and margin underneath. Saved, it joins the catalogue and quotes
+like anything else. **The quotation shows only the price** — name, reference,
+quantity, unit, amount. None of the breakdown reaches the customer.
+
 ### Products
 Every product carries the whole Unit Economics table from the financial model.
 Tap one and you get the landed cost built up line by line — manufacture,

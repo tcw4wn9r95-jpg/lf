@@ -143,6 +143,10 @@ export function products() {
       rrp: numberOr(fin.rrp, null),
       breakdown: fin.breakdown || null,
       distributorDiscount: numberOr(fin.distributorDiscount, null),
+      /* Made-to-order extras on top of a base product, and the markup they price at. */
+      customisations: Array.isArray(fin.customisations) ? fin.customisations : [],
+      basedOn: fin.basedOn || p.basedOn || null,
+      markup: numberOr(fin.markup, null),
       notes: fin.notes || '',
       hasFinancials: Number.isFinite(numberOr(fin.cost, null)),
     };

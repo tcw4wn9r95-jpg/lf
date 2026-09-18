@@ -601,3 +601,4 @@ select.input {
 .verdict-thin { border-left-color: var(--ink); }
 .verdict-loss { border-left-color: var(--alert); background: color-mix(in srgb, var(--alert) 4%, transparent); }
 .verdict-loss .verdict-head { color: var(--alert); }
+.cost-bar .seg-custom { background: repeating-linear-gradient(-45deg, #4a4a4a 0 3px, #8a8a8a 3px 6px); }

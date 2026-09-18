@@ -65,6 +65,8 @@ export const CATEGORY_LABEL = Object.fromEntries(CATEGORIES.map((c) => [c.id, c.
 
 /** Men's/Women's live in the category for apparel, so only prefix where it isn't implied. */
 export function displayName(product) {
+  // A product you named yourself is shown exactly as you named it.
+  if (product.custom) return product.name;
   const cat = product.category;
   const gendered = cat === 'jersey-m' || cat === 'bib-m' || cat === 'jersey-w' || cat === 'bib-w';
   if (!gendered) return product.name;

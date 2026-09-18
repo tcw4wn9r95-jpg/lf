@@ -2,10 +2,10 @@
 
 import { CATEGORIES, CATEGORY_LABEL, displayName } from '../catalog.js';
 import { load, products, setFinancials, update, uid, hasFinancials } from '../store.js';
-import { COST_LINES, costStack, unitEconomics, sheetComparison } from '../pricing.js';
+import { COST_LINES, costStack, unitEconomics, sheetComparison, priceFromMarkup, ROUNDING } from '../pricing.js';
 import {
   el, sectionTitle, button, input, select, field, sheet, closeSheet, toast,
-  currency, percent, confirmSheet,
+  currency, percent, confirmSheet, toFraction, toPercentInput,
 } from '../ui.js';
 
 export default function productsView({ navigate }) {
@@ -40,7 +40,14 @@ export default function productsView({ navigate }) {
     wrap.appendChild(list);
   });
 
-  wrap.appendChild(el('div', { class: 'btn-row' }, button('Add a product', { onclick: () => editProduct(null) })));
+  wrap.appendChild(
+    el(
+      'div',
+      { class: 'btn-row' },
+      button('Customise a product', { variant: 'primary', onclick: () => chooseBase() }),
+      button('Blank product', { onclick: () => editProduct(null) }),
+    ),
+  );
 
   return wrap;
 }
@@ -57,7 +64,11 @@ function productRow(p, data) {
       'div',
       { class: 'row-main' },
       el('div', { class: 'row-title' }, displayName(p)),
-      el('div', { class: 'row-sub' }, [p.code, p.maker].filter(Boolean).join(' · ') || '—'),
+      el(
+        'div',
+        { class: 'row-sub' },
+        p.basedOn ? `Custom · from ${baseName(p.basedOn)}` : [p.code, p.maker].filter(Boolean).join(' · ') || '—',
+      ),
     ),
     el(
       'div',
@@ -94,13 +105,18 @@ function openProduct(id) {
 
   sheet(displayName(p), body, {
     actions: [
-      button('Edit figures', {
+      button(p.basedOn ? 'Edit customisation' : 'Edit figures', {
         variant: 'primary',
         // Replace this sheet rather than stacking on it: the figures behind the
         // editor would otherwise sit there stale until you closed both.
         onclick: () => {
           closeSheet();
-          editProduct(p);
+          if (!p.basedOn) return editProduct(p);
+          const base = products().find((x) => x.id === p.basedOn);
+          // The base can be deleted out from under a custom product; fall back to
+          // picking a new one rather than failing.
+          if (base) buildCustom(base, p);
+          else chooseBase(p);
         },
       }),
     ],
@@ -138,7 +154,15 @@ function costStackTable(p, { stack }, settings) {
   if (stack.recovered) {
     tbody.appendChild(ledgerRow('Less import VAT reclaimed', `-${currency(stack.recovered)}`, 'is-good'));
   }
-  tbody.appendChild(ledgerRow('Landed cost (DDP)', currency(stack.landed), 'is-total'));
+
+  if (stack.customisations.length) {
+    tbody.appendChild(ledgerRow('Landed cost (DDP)', currency(stack.baseLanded), 'is-subtotal'));
+    stack.customisations.forEach((line) => tbody.appendChild(ledgerRow(line.label, currency(line.amount))));
+    tbody.appendChild(ledgerRow('Customisation', currency(stack.customisationTotal), 'is-subtotal'));
+    tbody.appendChild(ledgerRow('Unit cost', currency(stack.landed), 'is-total'));
+  } else {
+    tbody.appendChild(ledgerRow('Landed cost (DDP)', currency(stack.landed), 'is-total'));
+  }
   table.appendChild(tbody);
   out.appendChild(table);
 
@@ -152,18 +176,24 @@ function costStackTable(p, { stack }, settings) {
       el('span', { class: 'seg-freight', style: { width: `${share(stack.lines.freightIn + stack.lines.freightOut)}%` } }),
       el('span', { class: 'seg-duty', style: { width: `${share(stack.lines.duty + stack.lines.insurance)}%` } }),
       el('span', { class: 'seg-vat', style: { width: `${share(stack.lines.importVat - stack.recovered)}%` } }),
+      el('span', { class: 'seg-custom', style: { width: `${share(stack.customisationTotal)}%` } }),
     ),
   );
   out.appendChild(
     el(
       'p',
       { class: 'inline-note' },
-      `${percent(stack.fob / (stack.landed || 1))} made, ${percent(
-        (stack.lines.freightIn + stack.lines.freightOut) / (stack.landed || 1),
-      )} shipped, ${percent((stack.lines.duty + stack.lines.insurance) / (stack.landed || 1))} duty and insurance` +
-        (stack.lines.importVat && !stack.recovered
-          ? `, ${percent(stack.lines.importVat / (stack.landed || 1))} import VAT`
-          : ''),
+      [
+        `${percent(stack.fob / (stack.landed || 1))} made`,
+        `${percent((stack.lines.freightIn + stack.lines.freightOut) / (stack.landed || 1))} shipped`,
+        `${percent((stack.lines.duty + stack.lines.insurance) / (stack.landed || 1))} duty and insurance`,
+        stack.lines.importVat && !stack.recovered
+          ? `${percent(stack.lines.importVat / (stack.landed || 1))} import VAT`
+          : null,
+        stack.customisationTotal ? `${percent(stack.customisationTotal / (stack.landed || 1))} customisation` : null,
+      ]
+        .filter(Boolean)
+        .join(', '),
     ),
   );
 
@@ -433,3 +463,276 @@ function editProduct(p) {
 }
 
 const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+/* --------------------------------------------------- made-to-order products */
+
+/** Costs that come up on nearly every custom order, offered as one-tap starters. */
+const CUSTOMISATION_PRESETS = [
+  { label: 'Full sublimation artwork', amount: 4.5 },
+  { label: 'Silk-screen logo', amount: 1.5 },
+  { label: 'Woven neck label', amount: 0.3 },
+  { label: 'Elastic Interface pad upgrade', amount: 6 },
+  { label: 'Collar straps', amount: 0.4 },
+  { label: 'Sample before production', amount: 8 },
+];
+
+function baseName(id) {
+  const base = products().find((p) => p.id === id);
+  return base ? displayName(base) : 'a deleted product';
+}
+
+/** Pick the product whose cost structure the custom one inherits. */
+function chooseBase(existing = null) {
+  const withCosts = products().filter((p) => p.hasFinancials && !p.basedOn);
+  if (!withCosts.length) {
+    return toast('No products with costs to base one on yet.', 'alert');
+  }
+
+  const search = input({ type: 'search', placeholder: 'Search products', autocapitalize: 'off' });
+  const results = el('div', { class: 'list' });
+
+  const draw = () => {
+    const term = search.value.trim().toLowerCase();
+    const matches = withCosts.filter((p) => !term || `${displayName(p)} ${p.code || ''} ${p.maker || ''}`.toLowerCase().includes(term));
+    results.replaceChildren();
+    matches.forEach((p) => {
+      results.appendChild(
+        el(
+          'button',
+          {
+            class: 'row',
+            type: 'button',
+            onclick: () => {
+              closeSheet();
+              buildCustom(p, existing);
+            },
+          },
+          el(
+            'div',
+            { class: 'row-main' },
+            el('div', { class: 'row-title' }, displayName(p)),
+            el('div', { class: 'row-sub' }, `${currency(costStack(p).landed)} landed${p.maker ? ` · ${p.maker}` : ''}`),
+          ),
+          el('div', { class: 'row-chevron' }, '›'),
+        ),
+      );
+    });
+  };
+
+  search.addEventListener('input', draw);
+  draw();
+  sheet('Base it on', el('div', {}, field('Search', search), results));
+}
+
+/**
+ * Build a made-to-order product: inherit a cost structure, add the extras this
+ * job needs, put a markup on the lot, and read off the price.
+ */
+function buildCustom(base, existing = null) {
+  const { settings } = load();
+  const baseStack = costStack(base, { reclaimImportVat: settings.reclaimImportVat });
+
+  const nameInput = input({
+    value: existing?.name || '',
+    placeholder: `e.g. Club kit — ${displayName(base)}`,
+  });
+  const codeInput = input({ value: existing?.code || '', placeholder: 'Your reference' });
+  const markupInput = input({
+    type: 'number',
+    step: '5',
+    inputmode: 'decimal',
+    value: toPercentInput(existing?.markup ?? 1.5),
+  });
+  const roundingSelect = select(ROUNDING.map((r) => ({ value: r.value, label: r.label })), { value: 1 });
+  const notesInput = el('textarea', { class: 'input', placeholder: 'Anything worth remembering' }, existing?.notes || '');
+
+  let extras = (existing?.customisations || []).map((c) => ({ ...c }));
+
+  const extrasSlot = el('div');
+  const readout = el('div');
+
+  const recalc = () => {
+    const unitCost = round2(baseStack.landed + extras.reduce((t, x) => t + (parseFloat(x.amount) || 0), 0));
+    const priced = priceFromMarkup({
+      cost: unitCost,
+      markup: toFraction(markupInput.value),
+      vatRate: settings.vatRate,
+      rounding: parseFloat(roundingSelect.value),
+      commissionRate: settings.commissionRate,
+    });
+
+    const table = el('table', { class: 'ledger' });
+    const tbody = el('tbody');
+    tbody.appendChild(ledgerRow(`Landed cost · ${displayName(base)}`, currency(baseStack.landed)));
+    extras.forEach((x) => {
+      if (parseFloat(x.amount)) tbody.appendChild(ledgerRow(x.label || 'Customisation', currency(parseFloat(x.amount))));
+    });
+    tbody.appendChild(ledgerRow('Unit cost', currency(unitCost), 'is-subtotal'));
+    tbody.appendChild(ledgerRow(`Markup at ${percent(toFraction(markupInput.value))}`, currency(priced.net - unitCost)));
+    tbody.appendChild(ledgerRow('Sale price excl. VAT', currency(priced.net), 'is-subtotal'));
+    tbody.appendChild(ledgerRow(`VAT at ${percent(settings.vatRate)}`, currency(priced.vat)));
+    tbody.appendChild(ledgerRow('Sale price incl. VAT', currency(priced.gross), 'is-total'));
+    table.appendChild(tbody);
+
+    readout.replaceChildren(
+      table,
+      el(
+        'p',
+        { class: `inline-note ${priced.margin < settings.minMargin ? 'text-alert' : 'text-good'}` },
+        `${currency(priced.profit)} a unit at ${percent(priced.margin, 1)} margin` +
+          (priced.margin < settings.minMargin ? ` — under your ${percent(settings.minMargin)} floor` : ''),
+      ),
+      el('p', { class: 'inline-note' }, 'The quotation shows only the price including VAT. None of this breakdown reaches the customer.'),
+    );
+  };
+
+  const drawExtras = () => {
+    extrasSlot.replaceChildren();
+    if (extras.length) {
+      const list = el('div', { class: 'list' });
+      extras.forEach((x, i) => {
+        const label = input({ value: x.label, placeholder: 'What it is' });
+        const amount = input({ type: 'number', step: '0.01', inputmode: 'decimal', value: x.amount, style: { maxWidth: '88px' } });
+        label.addEventListener('input', () => {
+          extras[i].label = label.value;
+        });
+        amount.addEventListener('input', () => {
+          extras[i].amount = parseFloat(amount.value) || 0;
+          recalc();
+        });
+        list.appendChild(
+          el(
+            'div',
+            { class: 'line-item' },
+            el('div', { style: { flex: '1' } }, label),
+            amount,
+            button('×', {
+              variant: 'quiet',
+              'aria-label': `Remove ${x.label || 'line'}`,
+              onclick: () => {
+                extras.splice(i, 1);
+                drawExtras();
+                recalc();
+              },
+            }),
+          ),
+        );
+      });
+      extrasSlot.appendChild(list);
+    }
+
+    extrasSlot.appendChild(
+      el(
+        'div',
+        { class: 'chips' },
+        ...CUSTOMISATION_PRESETS.filter((preset) => !extras.some((x) => x.label === preset.label)).map((preset) =>
+          el(
+            'button',
+            {
+              class: 'chip',
+              type: 'button',
+              onclick: () => {
+                extras.push({ ...preset });
+                drawExtras();
+                recalc();
+              },
+            },
+            `+ ${preset.label}`,
+          ),
+        ),
+        el(
+          'button',
+          {
+            class: 'chip',
+            type: 'button',
+            onclick: () => {
+              extras.push({ label: '', amount: 0 });
+              drawExtras();
+            },
+          },
+          '+ Something else',
+        ),
+      ),
+    );
+  };
+
+  markupInput.addEventListener('input', recalc);
+  roundingSelect.addEventListener('change', recalc);
+  drawExtras();
+  recalc();
+
+  const body = el(
+    'div',
+    {},
+    field('Name', nameInput, 'What it is called on the quotation'),
+    field('Reference', codeInput),
+    sectionTitle('Costs on top'),
+    extrasSlot,
+    sectionTitle('Price'),
+    el('div', { class: 'field-grid' }, field('Markup on cost %', markupInput), field('Round price to', roundingSelect)),
+    readout,
+    field('Notes', notesInput),
+  );
+
+  sheet(existing ? `Edit ${existing.name}` : 'Customise a product', body, {
+    actions: [
+      button('Save', {
+        variant: 'primary',
+        onclick: () => {
+          const name = nameInput.value.trim();
+          if (!name) return toast('Give it a name.', 'alert');
+
+          const cleaned = extras
+            .map((x) => ({ label: (x.label || '').trim() || 'Customisation', amount: parseFloat(x.amount) || 0 }))
+            .filter((x) => x.amount !== 0);
+          const unitCost = round2(baseStack.landed + cleaned.reduce((t, x) => t + x.amount, 0));
+          const markup = toFraction(markupInput.value);
+          const priced = priceFromMarkup({
+            cost: unitCost,
+            markup,
+            vatRate: settings.vatRate,
+            rounding: parseFloat(roundingSelect.value),
+            commissionRate: settings.commissionRate,
+          });
+
+          const id = existing?.id || uid('prod');
+          if (!existing) {
+            update((d) => {
+              d.customProducts.push({
+                id,
+                name,
+                code: codeInput.value.trim(),
+                maker: base.maker || '',
+                category: base.category,
+                custom: true,
+                basedOn: base.id,
+              });
+            });
+          } else {
+            update((d) => {
+              const idx = d.customProducts.findIndex((x) => x.id === id);
+              if (idx >= 0) {
+                d.customProducts[idx] = { ...d.customProducts[idx], name, code: codeInput.value.trim() };
+              }
+            });
+          }
+
+          setFinancials(id, {
+            cost: unitCost,
+            // Keep the inherited stack so the product screen can still show where
+            // the base cost came from, with the extras listed after it.
+            breakdown: base.breakdown ? { ...base.breakdown } : null,
+            customisations: cleaned,
+            basedOn: base.id,
+            markup,
+            rrp: priced.gross,
+            notes: notesInput.value.trim(),
+          });
+
+          closeSheet();
+          toast(`${name} priced at ${currency(priced.gross)}.`);
+        },
+      }),
+    ],
+  });
+}

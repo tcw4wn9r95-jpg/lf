@@ -192,12 +192,39 @@ export const COST_LINES = [
   { key: 'importVat', label: 'Import VAT', group: 'logistics' },
 ];
 
+/** Per-unit costs added on top of a base product: printing, pads, labels, artwork. */
+export function customisationLines(product) {
+  const lines = Array.isArray(product?.customisations) ? product.customisations : [];
+  return lines
+    .map((line) => ({ label: String(line?.label || 'Customisation'), amount: num(line?.amount) }))
+    .filter((line) => line.amount !== 0 || line.label !== 'Customisation');
+}
+
+export function customisationTotal(product) {
+  return round2(customisationLines(product).reduce((t, l) => t + l.amount, 0));
+}
+
 /** Add the stack up. Falls back to the flat `cost` when no breakdown was imported. */
 export function costStack(product, { reclaimImportVat = false } = {}) {
+  const custom = customisationLines(product);
+  const customTotal = round2(custom.reduce((t, l) => t + l.amount, 0));
   const b = product?.breakdown;
+
   if (!b) {
-    const flat = num(product?.cost);
-    return { hasBreakdown: false, fob: flat, importCosts: 0, importVat: 0, landed: flat, lines: {} };
+    // A product with only a total still gets its customisations broken out, since
+    // that is the part being decided rather than inherited.
+    const flat = round2(num(product?.cost) - customTotal);
+    return {
+      hasBreakdown: false,
+      fob: flat,
+      importCosts: 0,
+      importVat: 0,
+      baseLanded: flat,
+      customisations: custom,
+      customisationTotal: customTotal,
+      landed: round2(flat + customTotal),
+      lines: {},
+    };
   }
 
   const lines = {};
@@ -211,6 +238,8 @@ export function costStack(product, { reclaimImportVat = false } = {}) {
   // timing cost rather than a cost of goods. Off by default to match the sheet.
   const recovered = reclaimImportVat ? lines.importVat : 0;
 
+  const baseLanded = round2(fob + importCosts - recovered);
+
   return {
     hasBreakdown: true,
     lines,
@@ -218,8 +247,40 @@ export function costStack(product, { reclaimImportVat = false } = {}) {
     importCosts,
     importVat: lines.importVat,
     recovered,
-    landed: round2(fob + importCosts - recovered),
-    landedWithVat: round2(fob + importCosts),
+    baseLanded,
+    customisations: custom,
+    customisationTotal: customTotal,
+    landed: round2(baseLanded + customTotal),
+    landedWithVat: round2(fob + importCosts + customTotal),
+  };
+}
+
+/**
+ * Price a made-to-order product: unit cost, a markup on it, and the resulting
+ * sale price with and without VAT.
+ *
+ * Markup is on cost (cost x 1.8), which is how a quote for custom work is put
+ * together. The margin it implies is returned alongside, because that is what the
+ * quotation screen judges a discount against.
+ */
+export function priceFromMarkup({ cost = 0, markup = 0, vatRate = 0, rounding = 0, commissionRate = 0 }) {
+  const unitCost = num(cost);
+  const net = unitCost * (1 + num(markup));
+  // Round the VAT-inclusive price, since that is the number the customer sees.
+  const gross = roundTo(net * (1 + num(vatRate)), num(rounding));
+  const netFromGross = gross / (1 + num(vatRate));
+  const commission = netFromGross * clampFraction(commissionRate);
+  const profit = round2(netFromGross - unitCost - commission);
+
+  return {
+    unitCost: round2(unitCost),
+    net: round2(netFromGross),
+    gross: round2(gross),
+    vat: round2(gross - netFromGross),
+    commission: round2(commission),
+    profit,
+    margin: netFromGross ? profit / netFromGross : 0,
+    markupApplied: unitCost ? profit / unitCost : 0,
   };
 }
 
