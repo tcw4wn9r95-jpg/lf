@@ -4,7 +4,6 @@
 import { load, update, exportBundle, importBundle, wipe } from '../store.js';
 import { APP_VERSION } from '../version.js';
 import { PROFILE_DEFAULTS, profile } from '../deadlines.js';
-import { ROUNDING, PRICING_MODES } from '../pricing.js';
 import { syncNow, parseFigures, applyFigures, syncUrlIsUsable, looksPublished, figuresTemplateCsv } from '../sync.js';
 import {
   el, card, sectionTitle, button, input, select, field, sheet, closeSheet, toast,
@@ -357,15 +356,12 @@ function defaultsPanel(data) {
         set.currency = v;
       }),
     ),
-    el(
-      'div',
-      { class: 'field-grid' },
-      field('VAT %', bind(input({ type: 'number', inputmode: 'decimal', step: '1', value: toPercentInput(s.vatRate) }), (set, v) => {
+    field(
+      'VAT %',
+      bind(input({ type: 'number', inputmode: 'decimal', step: '1', value: toPercentInput(s.vatRate) }), (set, v) => {
         set.vatRate = toFraction(v);
-      })),
-      field('Net margin %', bind(input({ type: 'number', inputmode: 'decimal', step: '1', value: toPercentInput(s.targetMargin) }), (set, v) => {
-        set.targetMargin = toFraction(v);
-      }), 'Only when pricing from margin'),
+      }),
+      'Prices are shown with VAT already inside them',
     ),
     field(
       'Margin floor %',
@@ -375,20 +371,11 @@ function defaultsPanel(data) {
       'A quotation below this is flagged before it goes out',
     ),
     field(
-      'Price from',
-      bind(select(Object.entries(PRICING_MODES).map(([value, label]) => ({ value, label })), { value: s.mode }), (set, v) => {
-        set.mode = v;
-      }),
-    ),
-    el(
-      'div',
-      { class: 'field-grid' },
-      field('Commission %', bind(input({ type: 'number', inputmode: 'decimal', step: '0.5', value: toPercentInput(s.commissionRate) }), (set, v) => {
+      'Commission %',
+      bind(input({ type: 'number', inputmode: 'decimal', step: '0.5', value: toPercentInput(s.commissionRate) }), (set, v) => {
         set.commissionRate = toFraction(v);
-      }), 'Payment and platform fees'),
-      field('Round prices to', bind(select(ROUNDING.map((r) => ({ value: r.value, label: r.label })), { value: s.rounding }), (set, v) => {
-        set.rounding = parseFloat(v);
-      })),
+      }),
+      'Payment and platform fees',
     ),
     el(
       'div',

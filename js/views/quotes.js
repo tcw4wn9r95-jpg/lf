@@ -3,8 +3,7 @@
 import { CATEGORIES, displayName } from '../catalog.js';
 import { load, products, saveQuote, deleteQuote, nextQuoteRef, uid, saveSale } from '../store.js';
 import {
-  priceQuote, PRICING_MODES, ROUNDING, breakEvenDiscount, maxDiscountForMargin,
-  marginVerdict, VERDICT_TONE,
+  priceQuote, breakEvenDiscount, maxDiscountForMargin, marginVerdict, VERDICT_TONE,
 } from '../pricing.js';
 import { buildQuotePdf, quoteFilename } from '../pdf.js';
 import { loadBrandFonts } from '../fonts.js';
@@ -88,12 +87,8 @@ function blankQuote() {
     subject: '',
     currency: settings.currency,
     vatRate: settings.vatRate,
-    mode: settings.mode,
-    targetMargin: settings.targetMargin,
-    markup: settings.markup,
     minMargin: settings.minMargin,
     discount: 0,
-    rounding: settings.rounding,
     commissionRate: settings.commissionRate,
     leadTime: settings.leadTime,
     paymentTerms: settings.paymentTerms,
@@ -237,42 +232,10 @@ function validate(quote) {
 /* ------------------------------------------------------------------- panels */
 
 function pricingPanel(quote, onChange) {
-  const modeSelect = select(
-    Object.entries(PRICING_MODES).map(([value, label]) => ({ value, label })),
-    { value: quote.mode },
-  );
-  const marginInput = input({ type: 'number', step: '1', inputmode: 'decimal', value: toPercentInput(quote.targetMargin) });
-  const markupInput = input({ type: 'number', step: '5', inputmode: 'decimal', value: toPercentInput(quote.markup) });
   const vatInput = input({ type: 'number', step: '1', inputmode: 'decimal', value: toPercentInput(quote.vatRate) });
   const discountInput = input({ type: 'number', step: '1', inputmode: 'decimal', value: toPercentInput(quote.discount) });
   const floorInput = input({ type: 'number', step: '1', inputmode: 'decimal', value: toPercentInput(quote.minMargin) });
-  const roundingSelect = select(ROUNDING.map((r) => ({ value: r.value, label: r.label })), { value: quote.rounding });
 
-  const marginField = field('Net margin %', marginInput, 'Share of the sale price kept');
-  const markupField = field('Markup %', markupInput, 'Added on top of cost');
-  const roundingField = field('Round prices to', roundingSelect);
-
-  const syncModeFields = () => {
-    // Pricing from retail means the price is already set; margin, markup and
-    // rounding would only get in the way.
-    marginField.style.display = quote.mode === 'margin' ? '' : 'none';
-    markupField.style.display = quote.mode === 'markup' ? '' : 'none';
-    roundingField.style.display = quote.mode === 'rrp' ? 'none' : '';
-  };
-
-  modeSelect.addEventListener('change', () => {
-    quote.mode = modeSelect.value;
-    syncModeFields();
-    onChange();
-  });
-  marginInput.addEventListener('input', () => {
-    quote.targetMargin = toFraction(marginInput.value);
-    onChange();
-  });
-  markupInput.addEventListener('input', () => {
-    quote.markup = toFraction(markupInput.value);
-    onChange();
-  });
   vatInput.addEventListener('input', () => {
     quote.vatRate = toFraction(vatInput.value);
     onChange();
@@ -283,10 +246,6 @@ function pricingPanel(quote, onChange) {
   });
   floorInput.addEventListener('input', () => {
     quote.minMargin = toFraction(floorInput.value);
-    onChange();
-  });
-  roundingSelect.addEventListener('change', () => {
-    quote.rounding = parseFloat(roundingSelect.value);
     onChange();
   });
 
@@ -314,21 +273,20 @@ function pricingPanel(quote, onChange) {
     ),
   );
 
-  syncModeFields();
-
   return card(
-    field('Start from', modeSelect, 'Retail is each product\u2019s own RRP'),
-    marginField,
-    markupField,
+    el(
+      'p',
+      { class: 'prose' },
+      'Every line starts at its retail price. Discount from there and the panel below says whether it works.',
+    ),
     field('Discount off retail %', discountInput, 'Applies to every line'),
     presets,
     el(
       'div',
       { class: 'field-grid' },
-      field('VAT %', vatInput),
+      field('VAT %', vatInput, 'Already inside the prices'),
       field('Margin floor %', floorInput, 'Flags anything below'),
     ),
-    roundingField,
   );
 }
 
@@ -375,8 +333,8 @@ function linesPanel(quote, onChange) {
             [
               // Show the journey from list to quoted price, so the discount is legible.
               line.discountApplied > 0.0001
-                ? `${currency(line.listUnit, { code: quote.currency })} → ${currency(line.netUnit, { code: quote.currency })}`
-                : `${currency(line.netUnit, { code: quote.currency })} each`,
+                ? `${currency(line.listGross, { code: quote.currency })} → ${currency(line.unitGross, { code: quote.currency })}`
+                : `${currency(line.unitGross, { code: quote.currency })} each`,
               line.discountApplied > 0.0001 ? `${percent(line.discountApplied)} off` : null,
               `${percent(line.margin)} margin`,
             ]
@@ -388,7 +346,7 @@ function linesPanel(quote, onChange) {
         el(
           'div',
           { class: 'row-end' },
-          el('div', { class: 'row-value' }, currency(line.netTotal, { code: quote.currency })),
+          el('div', { class: 'row-value' }, currency(line.grossTotal, { code: quote.currency })),
           verdict !== 'ok' ? pill(verdict === 'loss' ? 'below cost' : 'thin', VERDICT_TONE[verdict]) : null,
         ),
       ),
@@ -412,13 +370,18 @@ function totalsPanel(quote) {
   const row = (label, value, cls = '') => tbody.appendChild(el('tr', { class: cls }, el('td', {}, label), el('td', {}, value)));
 
   if (t.discountValue > 0.004) {
-    row('Before discount', currency(t.listSubtotal, { code }));
-    row(`Discount`, `-${currency(t.discountValue, { code })}`);
+    row('Retail value', currency(t.listGrossSubtotal, { code }));
+    row('Discount', `-${currency(t.discountValue, { code })}`);
   }
-  row('Subtotal', currency(t.subtotal, { code }));
+  row('Net of VAT', currency(t.subtotal, { code }));
   row(`VAT at ${percent(t.vatRate)}`, currency(t.vat, { code }));
   tbody.appendChild(
-    el('tr', { class: 'is-total' }, el('td', {}, `Total (${t.units} units)`), el('td', {}, currency(t.total, { code }))),
+    el(
+      'tr',
+      { class: 'is-total' },
+      el('td', {}, `Total incl. VAT (${t.units} units)`),
+      el('td', {}, currency(t.total, { code })),
+    ),
   );
   table.appendChild(tbody);
 
@@ -672,12 +635,12 @@ function editLine(quote, index, onChange) {
     inputmode: 'decimal',
     step: '0.01',
     value: line.mode === 'fixed' ? line.fixed : '',
-    placeholder: `${priced.listUnit.toFixed(2)} (calculated)`,
+    placeholder: `${priced.listGross.toFixed(2)} (calculated)`,
   });
 
   const minMargin = quote.minMargin ?? load().settings.minMargin;
-  const breakEven = breakEvenDiscount(priced.listUnit, line.cost, quote.commissionRate);
-  const atFloor = maxDiscountForMargin(priced.listUnit, line.cost, minMargin, quote.commissionRate);
+  const breakEven = breakEvenDiscount(priced.listGross, line.cost, quote.commissionRate, quote.vatRate);
+  const atFloor = maxDiscountForMargin(priced.listGross, line.cost, minMargin, quote.commissionRate, quote.vatRate);
   const verdict = marginVerdict(priced.margin, minMargin, priced.profit);
 
   sheet(
@@ -696,7 +659,7 @@ function editLine(quote, index, onChange) {
         el(
           'div',
           { class: 'verdict-body' },
-          `${currency(priced.netUnit, { code: quote.currency })} each leaves ${currency(priced.profit / (priced.qty || 1), {
+          `${currency(priced.unitGross, { code: quote.currency })} each leaves ${currency(priced.profit / (priced.qty || 1), {
             code: quote.currency,
           })} a unit at ${percent(priced.margin)}.`,
         ),
@@ -718,10 +681,16 @@ function editLine(quote, index, onChange) {
           el(
             'tr',
             {},
-            el('td', {}, 'List price before discount'),
-            el('td', {}, currency(priced.listUnit, { code: quote.currency })),
+            el('td', {}, 'Retail price before discount'),
+            el('td', {}, currency(priced.listGross, { code: quote.currency })),
           ),
           el('tr', {}, el('td', {}, 'Landed cost'), el('td', {}, currency(line.cost, { code: quote.currency }))),
+          el(
+            'tr',
+            {},
+            el('td', {}, `Net of VAT at ${percent(quote.vatRate)}`),
+            el('td', {}, currency(priced.unitNet, { code: quote.currency })),
+          ),
         ),
       ),
       el(
@@ -730,11 +699,7 @@ function editLine(quote, index, onChange) {
         `A quote-wide discount of ${percent(quote.discount)} is already applied on top of anything set here.`,
       ),
       field('Unit cost', cost, 'Only changes this quotation'),
-      field(
-        'Fixed unit price',
-        override,
-        quote.mode === 'rrp' ? 'Leave blank to price from retail' : 'Leave blank to price from margin',
-      ),
+      field('Fixed unit price', override, 'Including VAT. Leave blank to use the retail price'),
       field('Spec line', spec, 'Printed under the item name'),
     ),
     {

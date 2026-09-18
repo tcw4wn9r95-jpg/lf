@@ -31,62 +31,57 @@ export function roundTo(value, step) {
 }
 
 /**
- * Price a single unit, excluding VAT, before any discount.
- * `margin` and `markup` are fractions (0.45 = 45%). `rrp` is inclusive of VAT.
+ * Price one line of a quotation.
+ *
+ * Everything the user sees is VAT-INCLUSIVE, because that is how the catalogue is
+ * priced — "Precio Normal (con IVA)". A jersey listed at £116 is quoted at £116,
+ * not at £96.67. VAT is pulled back out only to work out what the sale actually
+ * earns, since VAT is money collected for HMRC and never revenue.
+ *
+ * A product with no RRP on file falls back to a price that clears the margin
+ * floor, and says so, rather than being quoted at nothing.
  */
-export function baseUnitPrice({ mode, cost = 0, margin = 0, markup = 0, rrp = 0, fixed = 0, vatRate = 0 }) {
-  switch (mode) {
-    case 'markup':
-      return cost * (1 + markup);
-    case 'rrp':
-      // Three products have no RRP in the model yet; fall back to margin pricing
-      // rather than quoting them at zero.
-      if (rrp > 0) return rrp / (1 + vatRate);
-      return margin >= 0.999 ? cost * 1000 : cost / (1 - margin);
-    case 'fixed':
-      return fixed;
-    case 'margin':
-    default:
-      // Margin is measured on the sale price, so it has to be inverted, not added.
-      // A margin at or above 100% has no finite price; clamp so the UI degrades
-      // to "cost" rather than Infinity.
-      if (margin >= 0.999) return cost * 1000;
-      return cost / (1 - margin);
-  }
+export function lineListPrice(line, quote) {
+  const fixed = num(line.fixed);
+  if (fixed > 0) return { gross: fixed, fallback: false };
+
+  const rrp = num(line.rrp);
+  if (rrp > 0) return { gross: rrp, fallback: false };
+
+  const cost = num(line.cost);
+  const floor = clampFraction(quote.minMargin ?? 0.3);
+  const commission = clampFraction(quote.commissionRate);
+  const denominator = 1 - commission - floor;
+  const net = denominator > 0 ? cost / denominator : cost;
+  return { gross: roundTo(net * (1 + num(quote.vatRate)), 1), fallback: true };
 }
 
 /**
- * Cost a whole quote.
+ * Cost a whole quote, in VAT-inclusive money.
  *
  * quote = {
- *   vatRate, targetMargin, markup, discount (quote-wide), rounding, commissionRate,
- *   lines: [{ productId, name, code, qty, mode, cost, rrp, fixed, margin, markup, discount }]
+ *   vatRate, discount (quote-wide), commissionRate, minMargin,
+ *   lines: [{ productId, name, code, qty, cost, rrp, fixed, discount }]
  * }
- * Any per-line `margin`/`markup`/`mode` left undefined falls back to the quote default.
  */
 export function priceQuote(quote) {
   const vatRate = num(quote.vatRate);
   const quoteDiscount = clampFraction(quote.discount);
   const commissionRate = num(quote.commissionRate);
-  const step = num(quote.rounding);
 
   const lines = (quote.lines || []).map((line) => {
     const qty = Math.max(0, num(line.qty));
     const cost = num(line.cost);
-    const mode = line.mode || quote.mode || 'margin';
-    const margin = clampFraction(line.margin ?? quote.targetMargin);
-    const markup = num(line.markup ?? quote.markup);
-
-    const listUnit = roundTo(
-      baseUnitPrice({ mode, cost, margin, markup, rrp: num(line.rrp), fixed: num(line.fixed), vatRate }),
-      step,
-    );
+    const { gross: listGross, fallback } = lineListPrice(line, quote);
 
     const lineDiscount = clampFraction(line.discount);
     // Line and quote discounts compound rather than add: 10% then 5% is 14.5% off.
-    const netUnit = round2(listUnit * (1 - lineDiscount) * (1 - quoteDiscount));
+    const discountApplied = 1 - (1 - lineDiscount) * (1 - quoteDiscount);
+    const unitGross = round2(listGross * (1 - lineDiscount) * (1 - quoteDiscount));
 
-    const netTotal = round2(netUnit * qty);
+    const grossTotal = round2(unitGross * qty);
+    const netTotal = round2(grossTotal / (1 + vatRate));
+    const vatTotal = round2(grossTotal - netTotal);
     const costTotal = round2(cost * qty);
     const commission = round2(netTotal * commissionRate);
     const profit = round2(netTotal - costTotal - commission);
@@ -95,64 +90,65 @@ export function priceQuote(quote) {
       ...line,
       qty,
       cost,
-      mode,
-      listUnit,
-      discountApplied: 1 - (1 - lineDiscount) * (1 - quoteDiscount),
-      netUnit,
+      listGross,
+      usesFallbackPrice: fallback,
+      discountApplied,
+      unitGross,
+      unitNet: round2(unitGross / (1 + vatRate)),
+      grossTotal,
       netTotal,
+      vatTotal,
       costTotal,
       commission,
       profit,
       margin: netTotal ? profit / netTotal : 0,
-      vatTotal: round2(netTotal * vatRate),
-      grossTotal: round2(netTotal * (1 + vatRate)),
     };
   });
 
   const sum = (key) => round2(lines.reduce((t, l) => t + l[key], 0));
 
-  // Gross subtotal is what the lines would have come to at list, so the quote can
-  // show the customer the discount as a cash figure.
-  const listSubtotal = round2(lines.reduce((t, l) => t + l.listUnit * l.qty, 0));
-  const subtotal = sum('netTotal');
+  const listGrossSubtotal = round2(lines.reduce((t, l) => t + l.listGross * l.qty, 0));
+  const grossTotal = sum('grossTotal');
+  const netTotal = sum('netTotal');
+  const vat = round2(grossTotal - netTotal);
   const costTotal = sum('costTotal');
   const commission = sum('commission');
-  const profit = round2(subtotal - costTotal - commission);
-  const vat = round2(subtotal * vatRate);
+  const profit = round2(netTotal - costTotal - commission);
 
   return {
     lines,
     units: lines.reduce((t, l) => t + l.qty, 0),
-    listSubtotal,
-    discountValue: round2(listSubtotal - subtotal),
-    subtotal,
+    listGrossSubtotal,
+    discountValue: round2(listGrossSubtotal - grossTotal),
+    grossTotal,
+    subtotal: netTotal,
     vat,
     vatRate,
-    total: round2(subtotal + vat),
+    total: grossTotal,
     costTotal,
     commission,
     profit,
-    margin: subtotal ? profit / subtotal : 0,
+    margin: netTotal ? profit / netTotal : 0,
     markupOnCost: costTotal ? profit / costTotal : 0,
   };
 }
 
 /**
- * The largest discount off `listUnit` that still leaves `targetMargin`.
- * With targetMargin 0 this is the break-even point: one penny more and the line
- * is sold below what it cost to land.
+ * The largest discount off a VAT-inclusive list price that still leaves
+ * `targetMargin`. With targetMargin 0 this is the break-even point: one penny
+ * more and the line is sold below what it cost to land.
  */
-export function maxDiscountForMargin(listUnit, cost, targetMargin = 0, commissionRate = 0) {
-  if (!listUnit) return 0;
+export function maxDiscountForMargin(listGross, cost, targetMargin = 0, commissionRate = 0, vatRate = 0) {
+  if (!listGross) return 0;
   const denominator = 1 - clampFraction(commissionRate) - clampFraction(targetMargin);
   if (denominator <= 0) return 0;
-  const minimumNet = cost / denominator;
-  return Math.max(0, 1 - minimumNet / listUnit);
+  const minimumGross = (cost / denominator) * (1 + num(vatRate));
+  return Math.max(0, 1 - minimumGross / listGross);
 }
 
 /** The discount that takes a line to exactly zero profit — the floor to quote against. */
-export function breakEvenDiscount(listUnit, cost, commissionRate = 0) {
-  return maxDiscountForMargin(listUnit, cost, 0, commissionRate);
+export function breakEvenDiscount(listGross, cost, commissionRate = 0, vatRate = 0) {
+  return maxDiscountForMargin(listGross, cost, 0, commissionRate, vatRate);
 }
 
 /**

@@ -30,13 +30,8 @@ export const DEFAULTS = Object.freeze({
   settings: {
     currency: 'GBP',
     vatRate: 0.2,
-    targetMargin: 0.45,
-    markup: 1.0,
-    /* Quotes start from the retail price and come down from there. */
-    mode: 'rrp',
     /* The margin a quote should not go below. Drives the verdict on every line. */
     minMargin: 0.3,
-    rounding: 1,
     commissionRate: 0.02,
     /* Unit-economics assumptions, from the financial model's Suposiciones tab. */
     saleDiscount: 0.05,

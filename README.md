@@ -28,24 +28,23 @@ the offline cache (service workers need `http(s)`).
 ## What it does
 
 ### Quotations
-Every line starts at the product's own retail price — *precio normal* — and you
-discount down from there, on the whole quote or one line at a time. The landed
-cost behind each product turns that into a straight answer:
+Every line is quoted at its retail price — *precio normal*, VAT included, exactly
+as the catalogue reads. A £116 jersey is quoted at £116. There is nothing to
+choose or configure first; you add products and discount down from there, on the
+whole quote or one line at a time.
 
-> **You can do this.** 39.6% margin, clear of your 30% floor. £68.29 on the order.
+The landed cost behind each product turns that into a straight answer:
 
-Push it further and it says so — *Tight, but not a loss* under your margin floor,
-*Do not send this* once the order is underwater — and names the lines that caused
-it. Each row shows £97.00 → £72.75 · 25% off · 46% margin, with a **thin** or
-**below cost** tag. Open a line and it tells you the most you can give away:
-*43% at your 30% floor, break-even at 60%.*
+> **You can do this.** 39.4% margin, clear of your 30% floor. £67.69 on the order.
 
-The floor lives in Settings. Pricing from a target margin, a markup on cost, or a
-price you type by hand is still there in the dropdown.
+Push further and it says so — *Tight, but not a loss* under your margin floor,
+*Do not send this* once the order is underwater — naming the lines that caused it.
+Each row reads £116.00 → £87.00 · 25% off · 46% margin with a **thin** or **below
+cost** tag. Open a line and it gives you the number to negotiate with: *most you
+can give at your 30% floor is 43%, break-even at 60%.*
 
-Export produces an A4 PDF: the logo lockup, your company and VAT details, the client,
-the line table, totals and terms, in the brand's black-and-white editorial style.
-It is generated on the phone, so it works offline and nothing is uploaded.
+VAT is pulled back out only to work out what a sale earns, and is shown inside the
+total: retail value, discount, net of VAT, VAT, total. The PDF reads the same way.
 
 ### Keeping figures current
 Import a CSV (the Files app reaches Google Drive directly), or point the app at a

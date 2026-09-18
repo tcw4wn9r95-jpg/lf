@@ -193,7 +193,7 @@ function lineTable(doc, y, totals, cur, quote) {
 
     setType(doc, 9.5, 'normal', INK);
     doc.text(String(line.qty), c.qty, baseline, { align: 'right' });
-    doc.text(money(line.netUnit, cur), c.unit, baseline, { align: 'right' });
+    doc.text(money(line.unitGross, cur), c.unit, baseline, { align: 'right' });
     if (c.showDiscount) {
       setType(doc, 9.5, 'normal', line.discountApplied > 0.0001 ? INK : MUTED);
       doc.text(line.discountApplied > 0.0001 ? pct(line.discountApplied, 0) : '—', c.disc, baseline, {
@@ -201,7 +201,7 @@ function lineTable(doc, y, totals, cur, quote) {
       });
     }
     setType(doc, 9.5, 'normal', INK);
-    doc.text(money(line.netTotal, cur), c.amount, baseline, { align: 'right' });
+    doc.text(money(line.grossTotal, cur), c.amount, baseline, { align: 'right' });
 
     y += rowH;
     rule(doc, y - 6, RULE, 0.4);
@@ -248,12 +248,14 @@ function totalsBlock(doc, y, totals, cur, quote) {
   }
 
   const startY = y;
+  // Prices are shown inclusive of VAT, as the catalogue is priced, with the VAT
+  // called out inside the total so the quote still reads as a VAT document.
   const rows = [];
   if (totals.discountValue > 0.004) {
-    rows.push(['Subtotal before discount', money(totals.listSubtotal, cur)]);
+    rows.push(['Retail value', money(totals.listGrossSubtotal, cur)]);
     rows.push(['Discount', `-${money(totals.discountValue, cur)}`]);
   }
-  rows.push(['Subtotal', money(totals.subtotal, cur)]);
+  rows.push(['Net of VAT', money(totals.subtotal, cur)]);
   rows.push([`VAT at ${pct(totals.vatRate, 0)}`, money(totals.vat, cur)]);
 
   rows.forEach(([label, value]) => {
@@ -277,7 +279,7 @@ function totalsBlock(doc, y, totals, cur, quote) {
 
   y += 12;
   setType(doc, 7.5, 'normal', MUTED);
-  doc.text(`${totals.units} unit${totals.units === 1 ? '' : 's'}  ·  inclusive of VAT`, x, y, { align: 'right' });
+  doc.text(`${totals.units} unit${totals.units === 1 ? '' : 's'}  ·  all prices include VAT`, x, y, { align: 'right' });
 
   return { startY, endY: y + 26, asideW: CONTENT_W - blockW - 30 };
 }
