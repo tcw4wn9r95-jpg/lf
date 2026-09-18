@@ -1,0 +1,13 @@
+# Unit economics, sales and backups never belong in this repository.
+# The app keeps them on the phone; these patterns stop a stray copy being committed.
+la-fuga-figures.json
+la-fuga-backup*.json
+*-figures.json
+*-backup*.json
+data/*.json
+!data/figures.example.json
+
+# Local noise
+.DS_Store
+node_modules/
+*.log
