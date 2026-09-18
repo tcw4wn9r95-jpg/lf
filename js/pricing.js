@@ -9,6 +9,8 @@
  * discounted subtotal — which is how a UK VAT invoice has to read.
  */
 
+import { bears as bearsLine, country } from './landed.js';
+
 export const PRICING_MODES = {
   margin: 'Target net margin',
   markup: 'Markup on cost',
@@ -210,6 +212,7 @@ export const COST_LINES = [
   { key: 'freightIn', label: 'Inbound freight', group: 'logistics' },
   { key: 'freightOut', label: 'Onward delivery', group: 'logistics' },
   { key: 'insurance', label: 'Insurance', group: 'logistics' },
+  { key: 'brokerage', label: 'Customs clearance', group: 'logistics' },
   { key: 'duty', label: 'Duty', group: 'logistics' },
   { key: 'importVat', label: 'Import VAT', group: 'logistics' },
 ];
@@ -231,15 +234,19 @@ export function productOrigin(product) {
  * Label a cost line for a specific product, so the freight legs name the route
  * actually taken rather than one generic to the catalogue.
  */
-export function costLineLabel(key, product) {
+export function costLineLabel(key, product, terms = null) {
   const meta = COST_LINES.find((c) => c.key === key);
   if (!meta) return key;
 
+  // A custom job can be going anywhere, so the leg is named from its own terms
+  // when it has them and from the catalogue's UK route when it does not.
+  const to = terms?.destination ? country(terms.destination)?.name || DESTINATION : DESTINATION;
+
   if (key === 'freightIn') {
     const origin = productOrigin(product);
-    return origin ? `Transport ${origin} → ${DESTINATION}` : `Transport to ${DESTINATION}`;
+    return origin ? `Transport ${origin} → ${to}` : `Transport to ${to}`;
   }
-  if (key === 'freightOut') return `Delivery within ${DESTINATION}`;
+  if (key === 'freightOut') return `Delivery within ${to}`;
   return meta.label;
 }
 
@@ -255,11 +262,45 @@ export function customisationTotal(product) {
   return round2(customisationLines(product).reduce((t, l) => t + l.amount, 0));
 }
 
-/** Add the stack up. Falls back to the flat `cost` when no breakdown was imported. */
-export function costStack(product, { reclaimImportVat = false } = {}) {
+/**
+ * The rates the imported breakdown was actually built at, recovered from its own
+ * numbers rather than assumed.
+ *
+ * The financial model charges insurance and duty on FOB and import VAT on
+ * everything landed before it, at rates that hold to two decimals across all
+ * thirty-one products. Reading them back out means a customised unit re-prices
+ * the import lines the way the sheet would have, instead of inheriting figures
+ * that were only ever right for the plain garment.
+ */
+export function impliedRates(b) {
+  const fob = num(b?.manufacture) + num(b?.packaging);
+  const vatBase = fob + num(b?.freightIn) + num(b?.insurance) + num(b?.duty);
+  return {
+    insurance: fob ? num(b?.insurance) / fob : 0,
+    duty: fob ? num(b?.duty) / fob : 0,
+    importVat: vatBase ? num(b?.importVat) / vatBase : 0,
+    basis: 'fob',
+  };
+}
+
+/**
+ * Add the stack up. Falls back to the flat `cost` when no breakdown was imported.
+ *
+ * Customisation is part of making the garment, not something that happens to it
+ * afterwards: the artwork is sublimated at the factory and the pad is sewn in
+ * there, so it is inside the FOB value the customs declaration is based on. That
+ * means insurance, duty and import VAT all rise with it — which is the whole
+ * reason to show the stack rather than a single inherited number.
+ *
+ * `terms` — an incoterm and a destination — decides which of those lines are
+ * ours at all. Without them the product is costed the way the model does it:
+ * everything ours, delivered duty paid into the UK.
+ */
+export function costStack(product, { reclaimImportVat = false, terms = null } = {}) {
   const custom = customisationLines(product);
   const customTotal = round2(custom.reduce((t, l) => t + l.amount, 0));
   const b = product?.breakdown;
+  const t = terms || product?.landedTerms || null;
 
   if (!b) {
     // A product with only a total still gets its customisations broken out, since
@@ -267,7 +308,8 @@ export function costStack(product, { reclaimImportVat = false } = {}) {
     const flat = round2(num(product?.cost) - customTotal);
     return {
       hasBreakdown: false,
-      fob: flat,
+      fob: round2(flat + customTotal),
+      production: round2(flat + customTotal),
       importCosts: 0,
       importVat: 0,
       baseLanded: flat,
@@ -275,34 +317,103 @@ export function costStack(product, { reclaimImportVat = false } = {}) {
       customisationTotal: customTotal,
       landed: round2(flat + customTotal),
       lines: {},
+      borne: {},
+      terms: t,
     };
   }
 
-  const lines = {};
-  COST_LINES.forEach(({ key }) => {
-    lines[key] = num(b[key]);
-  });
+  const build = (extras) => {
+    const raw = {};
+    COST_LINES.forEach(({ key }) => {
+      raw[key] = num(b[key]);
+    });
 
-  const fob = round2(lines.manufacture + lines.packaging);
-  const importCosts = round2(lines.freightIn + lines.freightOut + lines.insurance + lines.duty + lines.importVat);
-  // Import VAT is input tax: a VAT-registered company reclaims it, so it is a cash
-  // timing cost rather than a cost of goods. Off by default to match the sheet.
-  const recovered = reclaimImportVat ? lines.importVat : 0;
+    const rates = impliedRates(b);
+    const fob = round2(raw.manufacture + raw.packaging + extras);
 
-  const baseLanded = round2(fob + importCosts - recovered);
+    // Nothing has changed about this unit, so trust the imported numbers rather
+    // than recomputing them from rates read back out and landing a penny away.
+    const untouched = !t && !extras;
+    const lines = { ...raw };
+
+    // Freight moves with weight and lane, not with value: a sublimated jersey
+    // ships for what a plain one ships for. Only a new destination changes it.
+    lines.freightIn = t && Number.isFinite(t.freightIn) ? num(t.freightIn) : raw.freightIn;
+    lines.freightOut = t && Number.isFinite(t.freightOut) ? num(t.freightOut) : raw.freightOut;
+    lines.brokerage = t && Number.isFinite(t.brokerage) ? num(t.brokerage) : raw.brokerage;
+
+    const insuranceRate = t && Number.isFinite(t.insuranceRate) ? num(t.insuranceRate) : rates.insurance;
+    if (!untouched) lines.insurance = round2(fob * insuranceRate);
+
+    // Duty on the declared value. The model charges it on FOB; a destination
+    // rule charges it on CIF, which is what customs law actually asks for.
+    const cif = round2(fob + lines.freightIn + lines.insurance);
+    const ruled = Boolean(t) && Number.isFinite(t.dutyRate);
+    // Most customs unions levy on CIF, but not all — the US charges on FOB. An
+    // estimate says which, and is taken at its word.
+    const onCif = ruled ? (t.dutyBasis || 'cif') === 'cif' : false;
+    // A destination we hold no rate for must not quietly borrow the one this
+    // garment happens to carry for China into the UK. Better a visible gap.
+    const unknownDuty = Boolean(t) && !Number.isFinite(t.dutyRate);
+    const dutyRate = ruled ? num(t.dutyRate) : rates.duty;
+    if (unknownDuty) lines.duty = 0;
+    else if (!untouched) lines.duty = round2((ruled && onCif ? cif : fob) * dutyRate);
+
+    const ruledVat = Boolean(t) && Number.isFinite(t.vatRate);
+    const unknownVat = Boolean(t) && !Number.isFinite(t.vatRate);
+    const vatRate = ruledVat ? num(t.vatRate) : rates.importVat;
+    // Import VAT is on the customs value plus the duty, whatever duty itself was on.
+    const vatBase = ruledVat ? round2(cif + lines.duty) : round2(fob + lines.freightIn + lines.insurance + lines.duty);
+    if (unknownVat) lines.importVat = 0;
+    else if (!untouched) lines.importVat = round2(vatBase * vatRate);
+
+    // What the incoterm actually puts on us. Lines the buyer carries are still
+    // computed, so the screen can show what was handed over rather than hide it.
+    const code = t?.incoterm || null;
+    const borne = {};
+    COST_LINES.forEach(({ key }) => {
+      borne[key] = code ? bearsLine(code, key) : true;
+    });
+
+    const mine = (key) => (borne[key] ? lines[key] : 0);
+    const importCosts = round2(
+      mine('freightIn') + mine('freightOut') + mine('insurance') + mine('brokerage') + mine('duty') + mine('importVat'),
+    );
+    // Import VAT is input tax: a VAT-registered company reclaims it, so it is a
+    // cash timing cost rather than a cost of goods. Off by default to match the sheet.
+    const recovered = reclaimImportVat ? mine('importVat') : 0;
+    const production = round2(mine('manufacture') + mine('packaging') + extras);
+
+    return {
+      lines,
+      borne,
+      fob,
+      cif,
+      production,
+      importCosts,
+      importVat: lines.importVat,
+      recovered,
+      landed: round2(production + importCosts - recovered),
+      dutyBasis: ruled && onCif ? 'cif' : 'fob',
+      /* Lines we are on the hook for but hold no rate for. Loud, not hidden. */
+      unknown: [unknownDuty && borne.duty ? 'duty' : null, unknownVat && borne.importVat ? 'importVat' : null].filter(Boolean),
+    };
+  };
+
+  const full = build(customTotal);
+  // What the same unit would land at with none of the extras, so the builder can
+  // show what the customisation itself added once import is taken into account.
+  const plain = build(0);
 
   return {
     hasBreakdown: true,
-    lines,
-    fob,
-    importCosts,
-    importVat: lines.importVat,
-    recovered,
-    baseLanded,
+    ...full,
     customisations: custom,
     customisationTotal: customTotal,
-    landed: round2(baseLanded + customTotal),
-    landedWithVat: round2(fob + importCosts + customTotal),
+    baseLanded: plain.landed,
+    customisationLanded: round2(full.landed - plain.landed),
+    landedWithVat: round2(full.production + full.importCosts),
+    terms: t,
   };
 }
 

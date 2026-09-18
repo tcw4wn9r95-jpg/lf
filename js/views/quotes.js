@@ -672,7 +672,9 @@ function addLine(quote, p) {
     id: uid('ln'),
     productId: p.id,
     name: displayName(p),
-    code: p.code || p.maker || '',
+    // The reference only, never the maker: the factory's name has no business on
+    // a customer's quotation.
+    code: p.code || '',
     qty: 1,
     cost: p.cost ?? 0,
     rrp: p.rrp ?? 0,

@@ -602,3 +602,7 @@ select.input {
 .verdict-loss { border-left-color: var(--alert); background: color-mix(in srgb, var(--alert) 4%, transparent); }
 .verdict-loss .verdict-head { color: var(--alert); }
 .cost-bar .seg-custom { background: repeating-linear-gradient(-45deg, #4a4a4a 0 3px, #8a8a8a 3px 6px); }
+
+/* A cost line the incoterm hands to the buyer: shown, but plainly not ours. */
+.ledger .is-handed-over td { color: var(--ink-3); }
+.ledger .is-handed-over td:last-child { text-decoration: line-through; }

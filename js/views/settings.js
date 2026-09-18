@@ -6,6 +6,8 @@ import { APP_VERSION } from '../version.js';
 import { PROFILE_DEFAULTS, profile } from '../deadlines.js';
 import { syncNow, parseFigures, applyFigures, syncUrlIsUsable, looksPublished, figuresTemplateCsv } from '../sync.js';
 import { PRICE_DISPLAY, suggestedVatNote } from '../pricing.js';
+import { INCOTERMS, COUNTRIES, DEFAULT_INCOTERM, DEFAULT_DESTINATION } from '../landed.js';
+import { CLAUDE_MODELS, DEFAULT_MODEL } from '../claude.js';
 import {
   el, card, sectionTitle, button, input, select, field, sheet, closeSheet, toast,
   toFraction, toPercentInput, downloadBlob, confirmSheet,
@@ -31,6 +33,9 @@ export default function settingsView({ navigate }) {
 
   wrap.appendChild(sectionTitle('Pricing defaults'));
   wrap.appendChild(defaultsPanel(data));
+
+  wrap.appendChild(sectionTitle('Made-to-order'));
+  wrap.appendChild(customPanel(data));
 
   wrap.appendChild(sectionTitle('Unit economics'));
   wrap.appendChild(economicsPanel(data, navigate));
@@ -335,6 +340,92 @@ function economicsPanel(data, navigate) {
       { class: 'inline-note' },
       'VAT and commission come from Pricing defaults above and are shared with quotations.',
     ),
+  );
+}
+
+/* ------------------------------------------------------------- made-to-order */
+
+/*
+ * What a custom job starts from, and the key that lets Claude cost a lane this
+ * app has no rate for.
+ *
+ * The key is a live credential sitting in this phone's storage. It is kept out of
+ * backups deliberately, and it goes straight from the browser to Anthropic —
+ * there is no server here to hide it behind. Use one with a spend limit.
+ */
+function customPanel(data) {
+  const s = data.settings;
+  const bind = (node, apply) => {
+    node.addEventListener('change', () => {
+      update((d) => apply(d.settings, node.value));
+      toast('Saved.');
+    });
+    return node;
+  };
+
+  const keyInput = input({
+    type: 'password',
+    value: s.claudeApiKey || '',
+    placeholder: 'sk-ant-…',
+    autocapitalize: 'off',
+    autocorrect: 'off',
+    spellcheck: 'false',
+  });
+  keyInput.addEventListener('change', () => {
+    update((d) => {
+      d.settings.claudeApiKey = keyInput.value.trim();
+    });
+    toast(keyInput.value.trim() ? 'Key saved on this phone.' : 'Key removed.');
+  });
+
+  return card(
+    el(
+      'div',
+      { class: 'field-grid' },
+      field(
+        'Incoterm',
+        bind(select(INCOTERMS.map((i) => ({ value: i.code, label: i.code })), { value: s.customIncoterm || DEFAULT_INCOTERM }), (set, v) => {
+          set.customIncoterm = v;
+        }),
+        'Custom jobs start here',
+      ),
+      field(
+        'Customer in',
+        bind(select(COUNTRIES.map((c) => ({ value: c.code, label: c.name })), { value: s.customDestination || DEFAULT_DESTINATION }), (set, v) => {
+          set.customDestination = v;
+        }),
+      ),
+    ),
+    el(
+      'p',
+      { class: 'prose' },
+      'A made-to-order run does not inherit the catalogue’s import costs. Pick the terms you are quoting on and the app works out what is yours to pay.',
+    ),
+    field('Anthropic API key', keyInput, 'Stored on this phone only, and left out of backups'),
+    field(
+      'Model',
+      bind(select(CLAUDE_MODELS, { value: s.claudeModel || DEFAULT_MODEL }), (set, v) => {
+        set.claudeModel = v;
+      }),
+    ),
+    el(
+      'p',
+      { class: 'prose' },
+      'With a key, the customisation builder can ask Claude what duty, import VAT and freight a destination charges on cycling apparel — the cases a fixed table gets wrong. It sends the garment, the route and the FOB value, and everything it returns stays editable. It is a starting figure, not a customs ruling.',
+    ),
+    s.claudeApiKey
+      ? button('Forget the key', {
+          variant: 'quiet',
+          onclick: async () => {
+            if (!(await confirmSheet('Forget the key', 'Remove the Anthropic API key from this phone?'))) return;
+            update((d) => {
+              d.settings.claudeApiKey = '';
+            });
+            keyInput.value = '';
+            toast('Key removed.');
+          },
+        })
+      : null,
   );
 }
 

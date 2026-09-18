@@ -60,6 +60,13 @@ export const DEFAULTS = Object.freeze({
     ],
     footerNote: '',
     lastBackupAt: null,
+    /* Claude assist for landed-cost estimates. The key lives on this device only,
+       never in the repository and never in an export shared with anyone. */
+    claudeApiKey: '',
+    claudeModel: 'claude-sonnet-5',
+    /* What a made-to-order job defaults to before anyone touches it. */
+    customIncoterm: 'FOB',
+    customDestination: 'GB',
     /* Figures sync. The link lives here, on the phone — never in the repository. */
     syncUrl: '',
     syncAuto: false,
@@ -152,6 +159,8 @@ export function products() {
       customisations: Array.isArray(fin.customisations) ? fin.customisations : [],
       basedOn: fin.basedOn || p.basedOn || null,
       markup: numberOr(fin.markup, null),
+      /* Incoterm, destination and the duty rates this was costed under. */
+      landedTerms: fin.landedTerms || null,
       notes: fin.notes || '',
       hasFinancials: Number.isFinite(numberOr(fin.cost, null)),
     };
@@ -177,12 +186,15 @@ export function hasFinancials() {
 
 export function exportBundle({ includeFinancials = true } = {}) {
   const data = load();
+  // A backup gets mailed to yourself, dropped in Drive, handed to an accountant.
+  // The API key is a live credential and has no business travelling with it.
+  const { claudeApiKey, ...settings } = data.settings;
   return {
     kind: 'lafuga-backup',
     schema: SCHEMA,
     exportedAt: new Date().toISOString(),
     company: data.company,
-    settings: data.settings,
+    settings,
     financials: includeFinancials ? data.financials : {},
     customProducts: data.customProducts,
     quotes: data.quotes,

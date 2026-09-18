@@ -21,7 +21,7 @@
  * through here.
  */
 
-const VERSION = '2026.09.18-8';
+const VERSION = '2026.09.18-9';
 const CACHE = `lafuga-${VERSION}`;
 
 const SHELL = [
@@ -49,6 +49,8 @@ const SHELL = [
   './js/sync.js',
   './js/version.js',
   './js/deadlines.js',
+  './js/landed.js',
+  './js/claude.js',
   './js/views/today.js',
   './js/views/quotes.js',
   './js/views/products.js',

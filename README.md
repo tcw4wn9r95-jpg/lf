@@ -66,36 +66,63 @@ whole model. Settings writes that template for you. See
 ### Custom products
 **Customise a product** takes an existing one, inherits its whole cost structure,
 and lets you add what this job needs on top — sublimation artwork, a pad upgrade,
-a woven label, artwork setup — as one-tap presets or your own lines. The markup
-lands on the price **excluding** VAT, which is then rounded and the VAT added, so
-the number you set a margin against is the one you actually earn. It reads
-straight down:
+a woven label, artwork setup — as one-tap presets or your own lines.
+
+Those extras are **made at the factory**, so they go inside the FOB value the
+customs declaration is based on, and insurance, duty and import VAT all rise with
+them. £10.50 of customisation on a Chinese-made bib adds £14.38 landed, not
+£10.50. The builder says so in as many words.
+
+**A made-to-order run does not inherit the catalogue's import costs.** Pick the
+incoterm you are quoting on and where the customer is, and the app works out what
+is actually yours to pay. It defaults to FOB — goods leave the factory and the
+club's forwarder takes them from there — so nothing lands in your cost until you
+say it should. Lines the buyer carries are still shown, struck through, because
+knowing what you handed over is half of knowing whether the incoterm was right.
 
 ```
 Manufacture                              £32.83
 Packaging                                 £0.15
-FOB                                      £32.98
-Transport Spain → UK                      £2.08
-Delivery within UK                        £1.00
-Insurance                                 £1.65
+Full sublimation artwork                  £4.50
+Elastic Interface pad upgrade             £6.00
+FOB — declared value                     £43.48
+Transport Spain → Ireland                 £2.08
+Delivery within Ireland                   £1.00
+Insurance                                 £2.19
 Duty                                      £0.00
 Import VAT                                £0.00
-Import costs                              £4.73
-Landed cost (DDP)                        £37.71
-Full sublimation artwork                  £4.50
-Woven neck label                          £0.30
-Elastic Interface pad upgrade             £6.00
-Club artwork setup                        £2.40
-Unit cost                                £50.91
-Markup at 150%                           £76.09
-Sale price excl. VAT                    £127.00
-VAT at 20%                               £25.40
-Sale price incl. VAT                    £152.40
+Import costs                              £5.27
+Unit cost — DDP Ireland                  £49.05
+Markup at 150%                           £73.95
+Sale price excl. VAT                    £123.00
+VAT at 20%                               £24.60
+Sale price incl. VAT                    £147.60
 ```
 
-with the profit and margin underneath. Saved, it joins the catalogue and quotes
-like anything else. **The quotation shows only the price** — name, reference,
-quantity, unit, amount. None of the breakdown reaches the customer.
+The rules it knows are the ones worth knowing: goods inside the EU cross no
+border, the UK–EU agreement zero-rates the duty *only* on proof the garment
+originates where it ships from, and everything else pays the destination's rate.
+Where a single number cannot be right — US apparel runs 0–32% on fibre and
+construction, Switzerland charges by the kilo — it says the rate is unknown and
+refuses to count it rather than quietly borrowing one.
+
+### Asking Claude for the awkward ones
+Put an Anthropic API key in **Settings → Made-to-order** and the builder can ask
+Claude what a lane actually costs: it sends the garment, the route, the incoterm
+and the FOB value, and gets back a commodity code, a duty rate and basis, import
+VAT, per-unit freight and clearance, with its reasoning and what would change the
+answer. Everything lands in editable fields, marked with how sure it was.
+
+It is a starting figure, not a customs ruling — a broker signs off entries. The
+key lives in this phone's storage, goes straight to Anthropic (there is no server
+here to hide it behind), and is deliberately **left out of backups**. Use one with
+a spend limit you can revoke.
+
+Saved, a custom product joins the catalogue and quotes like anything else, with
+the terms it was costed under stored alongside, so reopening it in six months
+still adds up the same way. **The quotation shows only the price** — name,
+reference, quantity, unit, amount. None of the breakdown, and not the factory's
+name, reaches the customer.
 
 ### Products
 Every product carries the whole Unit Economics table from the financial model.
@@ -138,6 +165,8 @@ js/
   catalog.js            products — names only, no money
   pricing.js            margin/markup/discount/VAT maths
   sync.js               CSV parsing and the pull-from-a-sheet route
+  landed.js             incoterms, destinations and what duty they charge
+  claude.js             optional landed-cost estimates, key stays on the phone
   pdf.js                the branded quotation
   fonts.js              resolves Gotham/Hakira, falls back to the stand-in
   deadlines.js          UK filing rules engine

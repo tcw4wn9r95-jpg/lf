@@ -10,6 +10,11 @@ import {
   el, sectionTitle, button, input, select, field, sheet, closeSheet, toast,
   currency, percent, confirmSheet, toFraction, toPercentInput,
 } from '../ui.js';
+import {
+  INCOTERMS, COUNTRIES, country, incoterm, defaultTerms, originCode,
+  DEFAULT_INCOTERM, DEFAULT_DESTINATION,
+} from '../landed.js';
+import { estimateLanded, termsFromEstimate } from '../claude.js';
 
 export default function productsView({ navigate }) {
   const data = load();
@@ -135,14 +140,39 @@ function openProduct(id) {
  */
 function costStackRows(p, stack, { includeTotal = true } = {}) {
   const rows = [];
-  const line = (key) => rows.push(ledgerRow(costLineLabel(key, p), currency(stack.lines[key])));
+  const terms = stack.terms || null;
+  const unknown = new Set(stack.unknown || []);
 
-  line('manufacture');
-  line('packaging');
-  rows.push(ledgerRow('FOB', currency(stack.fob), 'is-subtotal'));
+  // A line the incoterm hands to the buyer still appears — knowing what you are
+  // not paying for is half of knowing whether the incoterm was the right choice.
+  const line = (key) => {
+    if (!stack.lines[key] && key === 'brokerage') return;
+    const mine = stack.borne ? stack.borne[key] !== false : true;
+    if (!mine && !stack.lines[key]) return;
+    const label = costLineLabel(key, p, terms);
+    if (unknown.has(key)) {
+      rows.push(ledgerRow(`${label} — rate unknown`, 'not counted', 'is-alert'));
+      return;
+    }
+    if (!mine) {
+      rows.push(ledgerRow(`${label} — buyer's`, currency(stack.lines[key]), 'is-handed-over'));
+      return;
+    }
+    rows.push(ledgerRow(label, currency(stack.lines[key])));
+  };
+
+  rows.push(ledgerRow(costLineLabel('manufacture', p, terms), currency(stack.lines.manufacture)));
+  rows.push(ledgerRow(costLineLabel('packaging', p, terms), currency(stack.lines.packaging)));
+
+  // Customisation is stitched in at the factory, so it belongs above the FOB
+  // line and inside the value duty is charged on.
+  stack.customisations.forEach((c) => rows.push(ledgerRow(c.label, currency(c.amount))));
+
+  rows.push(ledgerRow(stack.customisations.length ? 'FOB — declared value' : 'FOB', currency(stack.fob), 'is-subtotal'));
   line('freightIn');
   line('freightOut');
   line('insurance');
+  line('brokerage');
   line('duty');
   line('importVat');
   rows.push(ledgerRow('Import costs', currency(stack.importCosts), 'is-subtotal'));
@@ -150,9 +180,18 @@ function costStackRows(p, stack, { includeTotal = true } = {}) {
     rows.push(ledgerRow('Less import VAT reclaimed', `-${currency(stack.recovered)}`, 'is-good'));
   }
   if (includeTotal) {
-    rows.push(ledgerRow('Landed cost (DDP)', currency(stack.baseLanded), 'is-subtotal'));
+    rows.push(ledgerRow(landedLabel(terms), currency(stack.landed), 'is-subtotal'));
   }
   return rows;
+}
+
+/** What the bottom of the stack is called, given the terms it was costed under. */
+function landedLabel(terms) {
+  if (!terms) return 'Landed cost (DDP)';
+  const to = country(terms.destination);
+  // Naming the destination only makes sense when we are the ones getting it there.
+  const delivered = incoterm(terms.incoterm).bears.includes('freightIn');
+  return delivered && to ? `Our cost — ${terms.incoterm} ${to.name}` : `Our cost — ${terms.incoterm}`;
 }
 
 /** The landed-cost stack, line by line, the way the financial model builds it. */
@@ -169,27 +208,30 @@ function costStackTable(p, { stack }, settings) {
   }
 
   const tbody = el('tbody');
-  costStackRows(p, stack, { includeTotal: stack.customisations.length > 0 }).forEach((r) => tbody.appendChild(r));
-
-  if (stack.customisations.length) {
-    stack.customisations.forEach((c) => tbody.appendChild(ledgerRow(c.label, currency(c.amount))));
-    tbody.appendChild(ledgerRow('Customisation', currency(stack.customisationTotal), 'is-subtotal'));
-    tbody.appendChild(ledgerRow('Unit cost', currency(stack.landed), 'is-total'));
-  } else {
-    tbody.appendChild(ledgerRow('Landed cost (DDP)', currency(stack.landed), 'is-total'));
-  }
+  // The rows already carry the customisation inside the FOB value, so the only
+  // thing left to add is the bottom line.
+  costStackRows(p, stack, { includeTotal: false }).forEach((r) => tbody.appendChild(r));
+  tbody.appendChild(ledgerRow(landedLabel(stack.terms), currency(stack.landed), 'is-total'));
   out.appendChild(el('table', { class: 'ledger' }, tbody));
 
-  // Where the money actually goes, as a share of unit cost.
-  const share = (v) => (stack.landed ? Math.max(0, (v / stack.landed) * 100) : 0);
+  // Where the money actually goes, as a share of unit cost. Only what the
+  // incoterm leaves with us counts — a line the buyer pays is not our cost.
+  const mine = (key) => (stack.borne && stack.borne[key] === false ? 0 : stack.lines[key] || 0);
+  const total = stack.landed || 1;
+  const share = (v) => Math.max(0, (v / total) * 100);
+  const made = stack.fob - stack.customisationTotal;
+  const shipping = mine('freightIn') + mine('freightOut') + mine('brokerage');
+  const border = mine('duty') + mine('insurance');
+  const importVat = Math.max(0, mine('importVat') - stack.recovered);
+
   out.appendChild(
     el(
       'div',
       { class: 'cost-bar', 'aria-hidden': 'true' },
-      el('span', { class: 'seg-make', style: { width: `${share(stack.fob)}%` } }),
-      el('span', { class: 'seg-freight', style: { width: `${share(stack.lines.freightIn + stack.lines.freightOut)}%` } }),
-      el('span', { class: 'seg-duty', style: { width: `${share(stack.lines.duty + stack.lines.insurance)}%` } }),
-      el('span', { class: 'seg-vat', style: { width: `${share(stack.lines.importVat - stack.recovered)}%` } }),
+      el('span', { class: 'seg-make', style: { width: `${share(made)}%` } }),
+      el('span', { class: 'seg-freight', style: { width: `${share(shipping)}%` } }),
+      el('span', { class: 'seg-duty', style: { width: `${share(border)}%` } }),
+      el('span', { class: 'seg-vat', style: { width: `${share(importVat)}%` } }),
       el('span', { class: 'seg-custom', style: { width: `${share(stack.customisationTotal)}%` } }),
     ),
   );
@@ -200,13 +242,11 @@ function costStackTable(p, { stack }, settings) {
       'p',
       { class: 'inline-note' },
       [
-        `${percent(stack.fob / (stack.landed || 1))} made${origin ? ` in ${origin}` : ''}`,
-        `${percent((stack.lines.freightIn + stack.lines.freightOut) / (stack.landed || 1))} shipped to ${DESTINATION}`,
-        `${percent((stack.lines.duty + stack.lines.insurance) / (stack.landed || 1))} duty and insurance`,
-        stack.lines.importVat && !stack.recovered
-          ? `${percent(stack.lines.importVat / (stack.landed || 1))} import VAT`
-          : null,
-        stack.customisationTotal ? `${percent(stack.customisationTotal / (stack.landed || 1))} customisation` : null,
+        `${percent(made / total)} made${origin ? ` in ${origin}` : ''}`,
+        stack.customisationTotal ? `${percent(stack.customisationTotal / total)} customisation` : null,
+        shipping ? `${percent(shipping / total)} shipped to ${shipTo(stack)}` : null,
+        border ? `${percent(border / total)} duty and insurance` : null,
+        importVat ? `${percent(importVat / total)} import VAT` : null,
       ]
         .filter(Boolean)
         .join(', '),
@@ -214,6 +254,12 @@ function costStackTable(p, { stack }, settings) {
   );
 
   return out;
+}
+
+/** Where this product is actually going, given its own terms. */
+function shipTo(stack) {
+  const to = stack.terms?.destination ? country(stack.terms.destination) : null;
+  return to ? to.name : DESTINATION;
 }
 
 /** What each price on the ladder actually leaves behind. */
@@ -541,9 +587,17 @@ function chooseBase(existing = null) {
  * Build a made-to-order product: inherit a cost structure, add the extras this
  * job needs, put a markup on the lot, and read off the price.
  */
+/**
+ * Build a made-to-order product: inherit a cost structure, add the extras this
+ * job needs, settle where it is going and on whose terms, then read off a price.
+ *
+ * The extras are not an afterthought bolted onto a landed cost. They are made at
+ * the same factory in the same run, so they go into the FOB value and the duty,
+ * insurance and import VAT all move with them. On a £10 customisation into the
+ * UK that is another £4 of cost that would otherwise go unnoticed.
+ */
 function buildCustom(base, existing = null) {
   const { settings } = load();
-  const baseStack = costStack(base, { reclaimImportVat: settings.reclaimImportVat });
 
   const nameInput = input({
     value: existing?.name || '',
@@ -560,12 +614,25 @@ function buildCustom(base, existing = null) {
   const notesInput = el('textarea', { class: 'input', placeholder: 'Anything worth remembering' }, existing?.notes || '');
 
   let extras = (existing?.customisations || []).map((c) => ({ ...c }));
+  let terms =
+    existing?.landedTerms ||
+    defaultTerms({
+      product: base,
+      incoterm: settings.customIncoterm || DEFAULT_INCOTERM,
+      destination: settings.customDestination || DEFAULT_DESTINATION,
+    });
 
   const extrasSlot = el('div');
+  const termsSlot = el('div');
   const readout = el('div');
 
+  /* The product as it would be saved, so the stack is built from one source. */
+  const draft = () => ({ ...base, customisations: extras.filter((x) => parseFloat(x.amount)) });
+  const stackNow = () => costStack(draft(), { reclaimImportVat: settings.reclaimImportVat, terms });
+
   const recalc = () => {
-    const unitCost = round2(baseStack.landed + extras.reduce((t, x) => t + (parseFloat(x.amount) || 0), 0));
+    const stack = stackNow();
+    const unitCost = stack.landed;
     const priced = priceFromMarkup({
       cost: unitCost,
       markup: toFraction(markupInput.value),
@@ -574,45 +641,229 @@ function buildCustom(base, existing = null) {
       commissionRate: settings.commissionRate,
     });
 
-    const table = el('table', { class: 'ledger' });
     const tbody = el('tbody');
-    // The inherited stack in full, so a custom price can be argued from the
-    // manufacture cost up rather than from a single inherited number.
-    if (baseStack.hasBreakdown) {
-      costStackRows(base, baseStack).forEach((r) => tbody.appendChild(r));
+    if (stack.hasBreakdown) {
+      costStackRows(draft(), stack, { includeTotal: false }).forEach((r) => tbody.appendChild(r));
     } else {
-      tbody.appendChild(ledgerRow(`Landed cost · ${displayName(base)}`, currency(baseStack.landed), 'is-subtotal'));
+      tbody.appendChild(ledgerRow(`Cost · ${displayName(base)}`, currency(stack.landed), 'is-subtotal'));
     }
-
-    extras.forEach((x) => {
-      if (parseFloat(x.amount)) tbody.appendChild(ledgerRow(x.label || 'Customisation', currency(parseFloat(x.amount))));
-    });
-    if (extras.some((x) => parseFloat(x.amount))) {
-      tbody.appendChild(
-        ledgerRow(
-          'Customisation',
-          currency(round2(extras.reduce((t, x) => t + (parseFloat(x.amount) || 0), 0))),
-          'is-subtotal',
-        ),
-      );
-    }
-    tbody.appendChild(ledgerRow('Unit cost', currency(unitCost), 'is-subtotal'));
+    tbody.appendChild(ledgerRow(`Unit cost — ${landedLabel(terms).replace('Our cost — ', '')}`, currency(unitCost), 'is-subtotal'));
     tbody.appendChild(ledgerRow(`Markup at ${percent(toFraction(markupInput.value))}`, currency(priced.net - unitCost)));
     tbody.appendChild(ledgerRow('Sale price excl. VAT', currency(priced.net), 'is-subtotal'));
     tbody.appendChild(ledgerRow(`VAT at ${percent(settings.vatRate)}`, currency(priced.vat)));
     tbody.appendChild(ledgerRow('Sale price incl. VAT', currency(priced.gross), 'is-total'));
-    table.appendChild(tbody);
 
-    readout.replaceChildren(
-      table,
+    const bits = [
+      el('table', { class: 'ledger' }, tbody),
       el(
         'p',
         { class: `inline-note ${priced.margin < settings.minMargin ? 'text-alert' : 'text-good'}` },
         `${currency(priced.profit)} a unit at ${percent(priced.margin, 1)} margin` +
           (priced.margin < settings.minMargin ? ` — under your ${percent(settings.minMargin)} floor` : ''),
       ),
+    ];
+
+    // What the customisation really cost, once it had dragged duty up with it.
+    if (stack.customisationTotal) {
+      const direct = stack.customisationTotal;
+      const total = stack.customisationLanded;
+      bits.push(
+        el(
+          'p',
+          { class: 'inline-note' },
+          total > direct + 0.005
+            ? `The extras add ${currency(direct)} at the factory and ${currency(total)} landed — duty, insurance and import VAT rise with them.`
+            : `The extras add ${currency(direct)} a unit.`,
+        ),
+      );
+    }
+
+    // The inherited freight is for the route this product normally takes. Quoting
+    // a Denver club on a Spain-to-UK rate is a quiet way to lose money.
+    const staleLane =
+      stack.terms &&
+      stack.terms.destination !== DEFAULT_DESTINATION &&
+      !Number.isFinite(stack.terms.freightIn) &&
+      (stack.borne?.freightIn ?? true) &&
+      stack.lines.freightIn;
+    if (staleLane) {
+      bits.push(
+        el(
+          'p',
+          { class: 'inline-note text-alert' },
+          `Freight is still the ${currency(stack.lines.freightIn)} we pay to bring these into the UK. Getting them to ${country(stack.terms.destination)?.name || 'the customer'} will not cost that.`,
+        ),
+      );
+    }
+
+    if (stack.unknown?.length) {
+      bits.push(
+        el(
+          'p',
+          { class: 'inline-note text-alert' },
+          'This price does not include a rate we do not have. Estimate it or type one in before quoting.',
+        ),
+      );
+    }
+
+    bits.push(
       el('p', { class: 'inline-note' }, 'The quotation shows only the price, on whichever VAT basis it is set to. None of this breakdown reaches the customer.'),
     );
+    readout.replaceChildren(...bits);
+  };
+
+  /* ------------------------------------------------------- shipping & duty */
+
+  const drawTerms = () => {
+    const to = country(terms.destination);
+    const from = country(terms.origin || originCode(base));
+    const term = incoterm(terms.incoterm);
+
+    const incotermSelect = select(
+      INCOTERMS.map((i) => ({ value: i.code, label: `${i.code} — ${i.name}` })),
+      { value: terms.incoterm },
+    );
+    incotermSelect.addEventListener('change', () => {
+      // Which lines are ours changes; what the destination charges does not.
+      terms = { ...terms, incoterm: incotermSelect.value };
+      drawTerms();
+      recalc();
+    });
+
+    const destSelect = select(
+      COUNTRIES.map((c) => ({ value: c.code, label: c.name })),
+      { value: terms.destination },
+    );
+    destSelect.addEventListener('change', () => {
+      // A rate worked out for one country tells you nothing about the next, so
+      // the estimate is dropped rather than quietly carried over.
+      terms = defaultTerms({ product: base, incoterm: terms.incoterm, destination: destSelect.value });
+      drawTerms();
+      recalc();
+    });
+
+    const rate = (value, apply) => {
+      const node = input({
+        type: 'number',
+        step: '0.5',
+        inputmode: 'decimal',
+        value: Number.isFinite(value) ? toPercentInput(value) : '',
+        placeholder: '—',
+      });
+      node.addEventListener('input', () => {
+        terms = { ...terms, ...apply(node.value === '' ? null : toFraction(node.value)), source: 'manual' };
+        recalc();
+      });
+      return node;
+    };
+    const money = (value, apply) => {
+      const node = input({
+        type: 'number',
+        step: '0.25',
+        inputmode: 'decimal',
+        value: Number.isFinite(value) ? value : '',
+        placeholder: 'inherited',
+      });
+      node.addEventListener('input', () => {
+        terms = { ...terms, ...apply(node.value === '' ? null : parseFloat(node.value)), source: 'manual' };
+        recalc();
+      });
+      return node;
+    };
+
+    const bits = [
+      el('div', { class: 'field-grid' }, field('Incoterm', incotermSelect), field('Customer is in', destSelect)),
+      el('p', { class: 'inline-note' }, term.summary),
+    ];
+
+    if (from && to) {
+      bits.push(
+        el(
+          'p',
+          { class: `inline-note ${terms.confidence === 'low' ? 'text-alert' : ''}` },
+          `${from.name} → ${to.name}. ${terms.note || ''}`,
+        ),
+      );
+    }
+
+    (terms.caveats || []).forEach((c) => bits.push(el('p', { class: 'inline-note' }, `· ${c}`)));
+
+    if (terms.source === 'claude') {
+      bits.push(
+        el(
+          'p',
+          { class: 'inline-note' },
+          `Estimated by Claude${terms.hsCode ? `, classified ${terms.hsCode}` : ''} · ${terms.confidence} confidence. Check it against a broker before committing.`,
+        ),
+      );
+    }
+
+    bits.push(
+      el(
+        'div',
+        { class: 'field-grid' },
+        field('Duty %', rate(terms.dutyRate, (v) => ({ dutyRate: v }))),
+        field('Import VAT %', rate(terms.vatRate, (v) => ({ vatRate: v }))),
+      ),
+      el(
+        'div',
+        { class: 'field-grid' },
+        field('Freight in / unit', money(terms.freightIn, (v) => ({ freightIn: v }))),
+        field('Delivery / unit', money(terms.freightOut, (v) => ({ freightOut: v }))),
+      ),
+    );
+
+    const key = load().settings.claudeApiKey;
+    const estimate = button(terms.source === 'claude' ? 'Ask Claude again' : 'Estimate with Claude', {
+      variant: 'quiet',
+      onclick: async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        btn.textContent = 'Working it out…';
+        try {
+          const stack = stackNow();
+          const raw = await estimateLanded(
+            {
+              name: nameInput.value.trim() || displayName(base),
+              category: CATEGORY_LABEL[base.category] || base.category,
+              basedOn: displayName(base),
+              maker: base.maker,
+              originName: from?.name,
+              destinationName: to?.name || terms.destination,
+              incoterm: terms.incoterm,
+              incotermSummary: term.summary,
+              currency: settings.currency,
+              quantity: null,
+              manufacture: stack.lines.manufacture || 0,
+              packaging: stack.lines.packaging || 0,
+              customisations: stack.customisations,
+              fob: stack.fob,
+              knownFreight: base.breakdown?.freightIn || null,
+              knownRoute: from ? `${from.name} → United Kingdom, our usual lane` : null,
+            },
+            { apiKey: key, model: load().settings.claudeModel },
+          );
+          terms = termsFromEstimate(terms, raw);
+          drawTerms();
+          recalc();
+          toast('Estimate in. Every figure is editable.');
+        } catch (err) {
+          toast(err.message || 'That did not work.', 'alert');
+          btn.disabled = false;
+          btn.textContent = 'Estimate with Claude';
+        }
+      },
+    });
+
+    if (key) {
+      bits.push(el('div', { class: 'btn-row' }, estimate));
+    } else {
+      bits.push(
+        el('p', { class: 'inline-note' }, 'Add an Anthropic API key in Settings and Claude can work out the duty, VAT and freight for a destination this app has no rate for.'),
+      );
+    }
+
+    termsSlot.replaceChildren(...bits);
   };
 
   const drawExtras = () => {
@@ -688,6 +939,7 @@ function buildCustom(base, existing = null) {
   markupInput.addEventListener('input', recalc);
   roundingSelect.addEventListener('change', recalc);
   drawExtras();
+  drawTerms();
   recalc();
 
   const body = el(
@@ -700,8 +952,11 @@ function buildCustom(base, existing = null) {
       { class: 'inline-note' },
       `Inherits the cost structure of ${displayName(base)}${productOrigin(base) ? `, made in ${productOrigin(base)}` : ''}.`,
     ),
-    sectionTitle('Costs on top'),
+    sectionTitle('Made at the factory'),
+    el('p', { class: 'inline-note' }, 'These go into the FOB value, so duty and import VAT rise with them.'),
     extrasSlot,
+    sectionTitle('Shipping & duty'),
+    termsSlot,
     sectionTitle('Price'),
     el('div', { class: 'field-grid' }, field('Markup on cost %', markupInput), field('Round price to', roundingSelect)),
     readout,
@@ -719,7 +974,11 @@ function buildCustom(base, existing = null) {
           const cleaned = extras
             .map((x) => ({ label: (x.label || '').trim() || 'Customisation', amount: parseFloat(x.amount) || 0 }))
             .filter((x) => x.amount !== 0);
-          const unitCost = round2(baseStack.landed + cleaned.reduce((t, x) => t + x.amount, 0));
+          const stack = costStack(
+            { ...base, customisations: cleaned },
+            { reclaimImportVat: settings.reclaimImportVat, terms },
+          );
+          const unitCost = stack.landed;
           const markup = toFraction(markupInput.value);
           const priced = priceFromMarkup({
             cost: unitCost,
@@ -754,11 +1013,14 @@ function buildCustom(base, existing = null) {
           setFinancials(id, {
             cost: unitCost,
             // Keep the inherited stack so the product screen can still show where
-            // the base cost came from, with the extras listed after it.
+            // the base cost came from, with the extras listed inside it.
             breakdown: base.breakdown ? { ...base.breakdown } : null,
             customisations: cleaned,
             basedOn: base.id,
             markup,
+            // The terms it was costed under, so reopening it months later adds up
+            // the same way whatever the rules have done in the meantime.
+            landedTerms: terms,
             rrp: priced.gross,
             notes: notesInput.value.trim(),
           });
