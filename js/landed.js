@@ -317,3 +317,88 @@ export function supplyTreatment({
     warnings,
   };
 }
+
+/* ----------------------------------------------------------------- carriers */
+
+/*
+ * Who might actually move the boxes. Express integrators first, because a club
+ * order of a few hundred garments goes on a pallet or in cartons, not in a
+ * container — then the freight options for when it really is a container.
+ */
+export const CARRIERS = [
+  { value: 'fedex', label: 'FedEx' },
+  { value: 'dhl', label: 'DHL Express' },
+  { value: 'ups', label: 'UPS' },
+  { value: 'tnt', label: 'TNT' },
+  { value: 'dpd', label: 'DPD' },
+  { value: 'gls', label: 'GLS' },
+  { value: 'parcelforce', label: 'Parcelforce / Royal Mail' },
+  { value: 'evri', label: 'Evri' },
+  { value: 'air-freight', label: 'Air freight — forwarder' },
+  { value: 'sea-freight', label: 'Sea freight — forwarder' },
+  { value: 'road-freight', label: 'Road freight — forwarder' },
+  { value: 'other', label: 'Other / not decided' },
+];
+
+export function carrierLabel(value) {
+  return CARRIERS.find((c) => c.value === value)?.label || 'a carrier';
+}
+
+/*
+ * Packed weight of one garment, in kilograms, by catalogue category.
+ *
+ * Cycling kit is light and compressible, and nobody records a weight against a
+ * product, so a shipping quote has to start from somewhere. These are folded,
+ * poly-bagged weights for a mid-size garment — close enough to size a carton,
+ * and every one of them is editable before it goes anywhere near a carrier.
+ */
+export const PACKED_WEIGHTS = {
+  'jersey-m': 0.18,
+  'jersey-w': 0.17,
+  'bib-m': 0.22,
+  'bib-w': 0.21,
+  gilet: 0.14,
+  baselayer: 0.12,
+  jacket: 0.38,
+  accessories: 0.08,
+};
+
+const FALLBACK_WEIGHT = 0.2;
+/* Garments to a carton, and what the empty carton itself weighs. */
+const PER_CARTON = 40;
+const CARTON_TARE = 0.45;
+
+/** One product's packed weight, following a custom product back to its base. */
+export function unitWeight(product, lookup = null) {
+  if (!product) return FALLBACK_WEIGHT;
+  const direct = PACKED_WEIGHTS[product.category];
+  if (direct) return direct;
+  // A custom product sits in the Custom category and carries no weight of its
+  // own, so it borrows the garment it was built on.
+  if (product.basedOn && lookup) {
+    const base = lookup(product.basedOn);
+    if (base) return PACKED_WEIGHTS[base.category] || FALLBACK_WEIGHT;
+  }
+  return FALLBACK_WEIGHT;
+}
+
+/**
+ * What the whole shipment weighs and how many cartons it fills — the two
+ * numbers any carrier asks for first.
+ */
+export function shipmentSize(lines, resolve) {
+  let units = 0;
+  let goods = 0;
+  lines.forEach((line) => {
+    const qty = Math.max(0, Number(line.qty) || 0);
+    units += qty;
+    goods += qty * unitWeight(resolve(line.productId), resolve);
+  });
+  const cartons = units ? Math.max(1, Math.ceil(units / PER_CARTON)) : 0;
+  return {
+    units,
+    cartons,
+    goodsKg: Math.round(goods * 100) / 100,
+    grossKg: Math.round((goods + cartons * CARTON_TARE) * 100) / 100,
+  };
+}

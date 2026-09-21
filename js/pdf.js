@@ -229,7 +229,38 @@ function lineTable(doc, y, totals, cur, quote) {
     rule(doc, y - 6, RULE, 0.4);
   });
 
+  // Delivery passed on is a line the customer is paying for, so it belongs in
+  // the table with everything else rather than appearing inside the total.
+  if (totals.logisticsCharge > 0.004) {
+    const net = totals.logisticsCharge;
+    const gross = totals.logisticsChargeGross;
+    const inclusive = !quote.vatRate || (quote.priceDisplay || 'both') === 'incl';
+    const rowH = 11.5 + (showsBoth(quote) ? 9.5 : 0) + 11;
+    if (y + rowH > PAGE.h - M.bottom - 30) {
+      doc.addPage();
+      y = tableHead(doc, continuationHead(doc, quote), c, quote);
+    }
+    const baseline = y + 10;
+    setType(doc, 9.5, 'normal', INK);
+    doc.text(deliveryLabel(quote), c.item, baseline);
+    doc.text(money(inclusive ? gross : net, cur), c.amount, baseline, { align: 'right' });
+    if (showsBoth(quote)) {
+      setType(doc, 7.5, 'normal', MUTED);
+      doc.text(money(gross, cur), c.amount, baseline + 9.5, { align: 'right' });
+    }
+    y += rowH;
+    rule(doc, y - 6, RULE, 0.4);
+  }
+
   return y + 12;
+}
+
+/** What the passed-on logistics charge is called in front of the customer. */
+function deliveryLabel(quote) {
+  const code = quote.incoterm;
+  if (code === 'DDP') return 'Delivery, duties and clearance';
+  if (code === 'DAP' || code === 'CIF') return 'Delivery';
+  return 'Delivery and handling';
 }
 
 /** Masthead for pages after the first: the mark, quietly, plus the reference. */

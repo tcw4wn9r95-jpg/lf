@@ -63,7 +63,7 @@ export const DEFAULTS = Object.freeze({
     /* Claude assist for landed-cost estimates. The key lives on this device only,
        never in the repository and never in an export shared with anyone. */
     claudeApiKey: '',
-    claudeModel: 'claude-sonnet-5',
+    claudeModel: 'claude-opus-5',
     /* What a made-to-order job defaults to before anyone touches it. */
     customIncoterm: 'FOB',
     customDestination: 'GB',

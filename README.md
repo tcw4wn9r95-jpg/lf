@@ -139,6 +139,37 @@ Where a single number cannot be right — US apparel runs 0–32% on fibre and
 construction, Switzerland charges by the kilo — it says the rate is unknown and
 refuses to count it rather than quietly borrowing one.
 
+### Shipping and customs on a quotation
+Once the products are on a quote, **Shipping & customs** works out what the order
+costs to move and to clear. Two separate questions, asked of two separate
+estimators, because they fail differently — a carrier rate is a lane and a
+weight, a customs entry is a classification and a trade treatment. Answering
+them together lets a confident freight number carry a shaky duty number along
+with it.
+
+Pick the carrier (FedEx, DHL, UPS, TNT, DPD, GLS, Parcelforce, Evri, or a
+forwarder by mode), give the two postcodes, and the weight and carton count come
+prefilled from the garments themselves — a jersey is about 180g packed, bib
+shorts 220g — editable the moment you have actually weighed it. Then:
+
+> **FedEx International Priority · £412.50**
+> Volumetric weight wins on folded apparel: 3 cartons at 60x40x40cm give 34.6 kg
+> chargeable against 13.9 kg actual. Transit 2-3 working days.
+> · A negotiated FedEx account usually takes 35-45% off this.
+
+**Calculate import costs** then classifies what is actually on the quote and
+prices the entry — duty, import VAT, other taxes and clearance, with the
+commodity codes and the customs value it worked from. It reads the origin off
+the products, so a Chinese-made jersey shipped out of an EU warehouse gets no
+EU preference, which is the trap worth catching.
+
+Both land as **editable figures** and drop straight into the profitability you
+already had: £856.70 of shipping and duty takes a 49.2% order to 32.8%. Tick
+**Charge it to the customer** and it becomes one line on the PDF — *Delivery,
+duties and clearance* — with the margin recomputed against the larger total.
+The customer sees that line and its price. None of the rates, codes, carriers or
+customs values reach them.
+
 ### Asking Claude for the awkward ones
 Put an Anthropic API key in **Settings → Made-to-order** and the builder can ask
 Claude what a lane actually costs: it sends the garment, the route, the incoterm
@@ -199,7 +230,7 @@ js/
   pricing.js            margin/markup/discount/VAT maths
   sync.js               CSV parsing and the pull-from-a-sheet route
   landed.js             incoterms, destinations, duty and the VAT on a supply
-  claude.js             optional landed-cost estimates, key stays on the phone
+  claude.js             optional landed, freight and customs estimates
   pdf.js                the branded quotation
   fonts.js              resolves Gotham/Hakira, falls back to the stand-in
   deadlines.js          UK filing rules engine

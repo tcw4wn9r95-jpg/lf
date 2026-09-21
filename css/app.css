@@ -606,3 +606,7 @@ select.input {
 /* A cost line the incoterm hands to the buyer: shown, but plainly not ours. */
 .ledger .is-handed-over td { color: var(--ink-3); }
 .ledger .is-handed-over td:last-child { text-decoration: line-through; }
+
+/* A checkbox that reads as a sentence rather than a form control. */
+.toggle-row { display: flex; align-items: center; gap: 10px; margin: 12px 0 4px; font-size: 15px; }
+.toggle-row input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--ink); flex: none; }

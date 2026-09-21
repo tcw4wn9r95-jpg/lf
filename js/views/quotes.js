@@ -1,9 +1,13 @@
 /* Quotations — the list, and the builder that produces the branded PDF. */
 
-import { CATEGORIES, displayName } from '../catalog.js';
+import { CATEGORIES, CATEGORY_LABEL, displayName } from '../catalog.js';
 import { load, products, saveQuote, deleteQuote, nextQuoteRef, uid, saveSale } from '../store.js';
 import { customiseProduct } from './products.js';
-import { COUNTRIES, INCOTERMS, country, supplyTreatment, SELLER_COUNTRY, originCode } from '../landed.js';
+import {
+  COUNTRIES, INCOTERMS, country, supplyTreatment, SELLER_COUNTRY, originCode,
+  incoterm, CARRIERS, carrierLabel, shipmentSize,
+} from '../landed.js';
+import { estimateShipping, estimateCustoms } from '../claude.js';
 import {
   priceQuote, breakEvenDiscount, maxDiscountForMargin, marginVerdict, VERDICT_TONE,
   VAT_PRESETS, PRICE_DISPLAY, suggestedVatNote,
@@ -94,6 +98,20 @@ function blankQuote() {
     shipsFrom: SELLER_COUNTRY,
     incoterm: '',
     remarks: '',
+    /* What it costs to get the order there and through customs. Order-level,
+       so it lives here rather than being smeared across the lines. */
+    logistics: {
+      carrier: 'fedex',
+      originPostcode: '',
+      destPostcode: '',
+      dimensions: '',
+      grossKg: null,
+      cartons: null,
+      shipping: null,
+      customs: null,
+      chargeToCustomer: false,
+      chargeAmount: null,
+    },
     vatRate: settings.vatRate,
     minMargin: settings.minMargin,
     priceDisplay: settings.priceDisplay,
@@ -146,6 +164,7 @@ function editor(id, navigate) {
   function onPricingChange() {
     redrawTotals();
     redrawCross();
+    if (typeof drawLogistics === 'function') drawLogistics();
   }
 
   wrap.appendChild(el('h1', { class: 'page-title' }, existing ? quote.ref : 'New quotation'));
@@ -186,7 +205,7 @@ function editor(id, navigate) {
   wrap.appendChild(clientSlot);
 
   /* Where it is going, and on whose terms */
-  wrap.appendChild(sectionTitle('Shipping & VAT'));
+  wrap.appendChild(sectionTitle('Destination & VAT'));
   wrap.appendChild(crossSlot);
 
   /* Pricing controls */
@@ -199,6 +218,38 @@ function editor(id, navigate) {
     sectionTitle('Items', button('Add', { variant: 'quiet', onclick: () => pickProducts(quote, onPricingChange) })),
   );
   wrap.appendChild(linesSlot);
+
+  /* Shipping and customs — after the items, because both are worked out from them */
+  wrap.appendChild(sectionTitle('Shipping & customs'));
+  const logisticsSlot = el('div', { class: 'list' });
+  const drawLogistics = () => {
+    const t = priceQuote(quote);
+    logisticsSlot.replaceChildren(
+      el(
+        'button',
+        { class: 'row', type: 'button', onclick: () => logisticsSheet(quote, () => { drawLogistics(); redrawTotals(); redrawCross(); }) },
+        el(
+          'div',
+          { class: 'row-main' },
+          el('div', { class: 'row-title' }, t.logisticsCost ? 'Shipping & customs' : 'Calculate shipping & customs'),
+          el(
+            'div',
+            { class: 'row-sub' },
+            t.logisticsCost
+              ? `${carrierLabel(quote.logistics?.carrier)}${t.logistics.chargeToCustomer ? ' · charged to the customer' : ' · absorbed'}`
+              : quote.lines.length
+                ? 'Work out the freight and the border with Claude'
+                : 'Add the products first',
+          ),
+        ),
+        t.logisticsCost
+          ? el('div', { class: 'row-end' }, el('div', { class: 'row-value' }, currency(t.logisticsCost, { code: quote.currency })))
+          : el('div', { class: 'row-chevron' }, '›'),
+      ),
+    );
+  };
+  drawLogistics();
+  wrap.appendChild(logisticsSlot);
 
   /* Totals */
   wrap.appendChild(sectionTitle('Totals'));
@@ -491,6 +542,11 @@ function totalsPanel(quote) {
   const detail = el('table', { class: 'ledger' });
   const dbody = el('tbody');
   dbody.appendChild(el('tr', {}, el('td', {}, 'Cost of goods'), el('td', {}, currency(t.costTotal, { code }))));
+  if (t.logisticsCost > 0.004) {
+    dbody.appendChild(
+      el('tr', {}, el('td', {}, 'Shipping & customs'), el('td', {}, currency(t.logisticsCost, { code }))),
+    );
+  }
   if (t.commission > 0.004) {
     dbody.appendChild(
       el('tr', {}, el('td', {}, `Commission at ${percent(quote.commissionRate)}`), el('td', {}, currency(t.commission, { code }))),
@@ -595,6 +651,314 @@ function presentationPanel(quote) {
   );
 }
 
+
+
+/* ------------------------------------------------------ shipping & customs */
+
+/** The postcode buried in the company's address lines, for the origin field. */
+function ownPostcode(company) {
+  const found = (company?.addressLines || []).find((l) => /\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b/i.test(l));
+  return found ? found.trim() : '';
+}
+
+/** The quote's lines as the estimators want them: named, counted, valued. */
+function shipmentItems(quote, totals, resolve) {
+  return totals.lines.map((l) => {
+    const p = resolve(l.productId);
+    return {
+      name: l.name,
+      qty: l.qty,
+      category: p ? CATEGORY_LABEL[p.category] || p.category : '',
+      unitValue: l.unitNet,
+      lineValue: l.netTotal,
+    };
+  });
+}
+
+/**
+ * What the order costs to ship and to clear.
+ *
+ * Two separate questions asked of two separate estimators, because they fail
+ * differently: a carrier rate is a lane and a weight, while a customs entry is a
+ * classification and a trade treatment. Answering them together would let a
+ * confident freight number carry a shaky duty number along with it.
+ */
+function logisticsSheet(quote, onDone) {
+  const { settings, company } = load();
+  const all = products();
+  const resolve = (id) => all.find((p) => p.id === id) || null;
+  const totals = priceQuote(quote);
+  const size = shipmentSize(quote.lines, resolve);
+
+  const L = quote.logistics || (quote.logistics = {});
+  if (!L.originPostcode && (quote.shipsFrom || SELLER_COUNTRY) === SELLER_COUNTRY) {
+    L.originPostcode = ownPostcode(company);
+  }
+  if (!Number.isFinite(L.grossKg)) L.grossKg = size.grossKg;
+  if (!Number.isFinite(L.cartons)) L.cartons = size.cartons;
+
+  const body = el('div');
+  const draw = () => {
+    const bits = [];
+    const key = load().settings.claudeApiKey;
+    const fromCountry = country(quote.shipsFrom || SELLER_COUNTRY);
+    const toCountry = country(quote.client.country);
+
+    if (!quote.lines.length) {
+      bits.push(el('p', { class: 'inline-note text-alert' }, 'Add the products first — the weight and the declared value both come from them.'));
+      body.replaceChildren(...bits);
+      return;
+    }
+
+    const carrier = select(CARRIERS, { value: L.carrier || 'fedex' });
+    carrier.addEventListener('change', () => {
+      L.carrier = carrier.value;
+    });
+
+    const origin = input({ value: L.originPostcode || '', placeholder: 'Postcode', autocapitalize: 'characters' });
+    origin.addEventListener('input', () => {
+      L.originPostcode = origin.value;
+    });
+    const dest = input({ value: L.destPostcode || '', placeholder: 'Postcode', autocapitalize: 'characters' });
+    dest.addEventListener('input', () => {
+      L.destPostcode = dest.value;
+    });
+
+    const weight = input({ type: 'number', step: '0.1', inputmode: 'decimal', value: L.grossKg });
+    weight.addEventListener('input', () => {
+      L.grossKg = parseFloat(weight.value) || 0;
+    });
+    const cartons = input({ type: 'number', step: '1', inputmode: 'numeric', value: L.cartons });
+    cartons.addEventListener('input', () => {
+      L.cartons = parseInt(cartons.value, 10) || 1;
+    });
+    const dims = input({ value: L.dimensions || '', placeholder: 'e.g. 60 x 40 x 40 cm' });
+    dims.addEventListener('input', () => {
+      L.dimensions = dims.value;
+    });
+
+    bits.push(
+      el('div', { class: 'field-grid' }, field('Carrier', carrier), field('Cartons', cartons)),
+      el(
+        'div',
+        { class: 'field-grid' },
+        field('From', origin, fromCountry ? fromCountry.name : 'Origin'),
+        field('To', dest, toCountry ? toCountry.name : 'Set the client’s country'),
+      ),
+      el('div', { class: 'field-grid' }, field('Gross weight (kg)', weight, `${size.units} garments`), field('Carton size', dims, 'Optional')),
+      el(
+        'p',
+        { class: 'inline-note' },
+        `Weight estimated from the garments: ${size.goodsKg} kg of kit in ${size.cartons} carton${size.cartons === 1 ? '' : 's'}. Change it if you have weighed it.`,
+      ),
+    );
+
+    if (!key) {
+      bits.push(el('p', { class: 'inline-note text-alert' }, 'Add an Anthropic API key in Settings to work these out.'));
+      body.replaceChildren(...bits);
+      return;
+    }
+
+    /* ---- shipping ---- */
+    bits.push(sectionTitle('Shipping'));
+    const ship = L.shipping;
+    if (ship) {
+      const amount = input({ type: 'number', step: '0.01', inputmode: 'decimal', value: ship.amount });
+      amount.addEventListener('input', () => {
+        ship.amount = parseFloat(amount.value) || 0;
+      });
+      bits.push(
+        field(`${carrierLabel(L.carrier)} — whole shipment`, amount, ship.service || ''),
+        el(
+          'p',
+          { class: `inline-note ${ship.confidence === 'low' ? 'text-alert' : ''}` },
+          `${ship.reasoning || ''}${ship.transitDays ? ` Transit ${ship.transitDays}.` : ''}`,
+        ),
+      );
+      if (ship.chargeableKg) bits.push(el('p', { class: 'inline-note' }, `Chargeable weight ${ship.chargeableKg} kg${ship.surcharges ? ` · ${ship.surcharges}` : ''}`));
+      (ship.caveats || []).forEach((c) => bits.push(el('p', { class: 'inline-note' }, `· ${c}`)));
+      bits.push(el('p', { class: 'inline-note' }, `Estimated by Claude · ${ship.confidence} confidence.`));
+    }
+
+    bits.push(
+      el(
+        'div',
+        { class: 'btn-row' },
+        button(ship ? 'Price it again' : 'Calculate shipping', {
+          variant: ship ? 'ghost' : 'primary',
+          onclick: async (e) => {
+            const btn = e.currentTarget;
+            btn.disabled = true;
+            btn.textContent = 'Asking the freight desk…';
+            try {
+              const raw = await estimateShipping(
+                {
+                  carrierLabel: carrierLabel(L.carrier),
+                  originPostcode: L.originPostcode,
+                  originCountryName: fromCountry?.name,
+                  destPostcode: L.destPostcode,
+                  destCountryName: toCountry?.name,
+                  incoterm: quote.incoterm,
+                  currency: quote.currency,
+                  units: size.units,
+                  cartons: L.cartons,
+                  goodsKg: size.goodsKg,
+                  grossKg: L.grossKg,
+                  dimensions: L.dimensions,
+                  items: shipmentItems(quote, totals, resolve),
+                  declaredValue: totals.subtotal,
+                },
+                { apiKey: key, model: load().settings.claudeModel },
+              );
+              L.shipping = raw;
+              draw();
+              toast('Shipping in. The figure is editable.');
+            } catch (err) {
+              toast(err.message || 'That did not work.', 'alert');
+              btn.disabled = false;
+              btn.textContent = ship ? 'Price it again' : 'Calculate shipping';
+            }
+          },
+        }),
+      ),
+    );
+
+    /* ---- customs ---- */
+    bits.push(sectionTitle('Import costs'));
+    if (!toCountry || toCountry.code === (quote.shipsFrom || SELLER_COUNTRY)) {
+      bits.push(
+        el(
+          'p',
+          { class: 'inline-note' },
+          toCountry
+            ? `${toCountry.name} to ${toCountry.name} crosses no border, so there is nothing to clear.`
+            : 'Set the client’s country and this can be worked out.',
+        ),
+      );
+    } else {
+      const cus = L.customs;
+      if (cus) {
+        const money = (label, valueKey) => {
+          const node = input({ type: 'number', step: '0.01', inputmode: 'decimal', value: cus[valueKey] ?? 0 });
+          node.addEventListener('input', () => {
+            cus[valueKey] = parseFloat(node.value) || 0;
+          });
+          return field(label, node);
+        };
+        bits.push(
+          el('div', { class: 'field-grid' }, money('Duty', 'duty'), money('Import VAT', 'importVat')),
+          el('div', { class: 'field-grid' }, money('Clearance', 'brokerage'), money('Other taxes', 'otherTaxes')),
+          el('p', { class: `inline-note ${cus.confidence === 'low' ? 'text-alert' : ''}` }, cus.reasoning || ''),
+        );
+        if (cus.hsCodes?.length) bits.push(el('p', { class: 'inline-note' }, `Classified ${cus.hsCodes.join(' · ')}`));
+        if (cus.customsValue) {
+          bits.push(
+            el(
+              'p',
+              { class: 'inline-note' },
+              `On a customs value of ${currency(cus.customsValue, { code: quote.currency })} (${(cus.valuationBasis || 'cif').toUpperCase()}).`,
+            ),
+          );
+        }
+        (cus.caveats || []).forEach((c) => bits.push(el('p', { class: 'inline-note' }, `· ${c}`)));
+        bits.push(el('p', { class: 'inline-note' }, `Estimated by Claude · ${cus.confidence} confidence. A broker signs off the entry, not this.`));
+      }
+
+      bits.push(
+        el(
+          'div',
+          { class: 'btn-row' },
+          button(cus ? 'Work it out again' : 'Calculate import costs', {
+            variant: cus ? 'ghost' : 'primary',
+            onclick: async (e) => {
+              const btn = e.currentTarget;
+              btn.disabled = true;
+              btn.textContent = 'Classifying the goods…';
+              try {
+                const origins = [...new Set(quote.lines.map((l) => originCode(resolve(l.productId))).filter(Boolean))];
+                const raw = await estimateCustoms(
+                  {
+                    originName: origins.map((c) => country(c)?.name).filter(Boolean).join(' and ') || null,
+                    shipsFromName: fromCountry?.name,
+                    destCountryName: toCountry.name,
+                    incoterm: quote.incoterm,
+                    incotermSummary: quote.incoterm ? incoterm(quote.incoterm).summary : '',
+                    currency: quote.currency,
+                    items: shipmentItems(quote, totals, resolve),
+                    declaredValue: totals.subtotal,
+                    freight: L.shipping?.amount || null,
+                    insurance: null,
+                    grossKg: L.grossKg,
+                    cartons: L.cartons,
+                  },
+                  { apiKey: key, model: load().settings.claudeModel },
+                );
+                L.customs = raw;
+                draw();
+                toast('Import costs in. Every figure is editable.');
+              } catch (err) {
+                toast(err.message || 'That did not work.', 'alert');
+                btn.disabled = false;
+                btn.textContent = cus ? 'Work it out again' : 'Calculate import costs';
+              }
+            },
+          }),
+        ),
+      );
+    }
+
+    /* ---- what it does to the quote ---- */
+    const after = priceQuote(quote);
+    if (after.logisticsCost) {
+      bits.push(sectionTitle('On this quotation'));
+      const tbody = el('tbody');
+      const row = (a, b, cls = '') => tbody.appendChild(el('tr', { class: cls }, el('td', {}, a), el('td', {}, b)));
+      if (after.logistics.shipping) row('Shipping', currency(after.logistics.shipping, { code: quote.currency }));
+      if (after.logistics.customs) row('Duty, taxes and clearance', currency(after.logistics.customs, { code: quote.currency }));
+      row('Shipping & customs', currency(after.logisticsCost, { code: quote.currency }), 'is-subtotal');
+      bits.push(el('table', { class: 'ledger' }, tbody));
+
+      const charge = el('input', { type: 'checkbox', checked: Boolean(L.chargeToCustomer) });
+      charge.addEventListener('change', () => {
+        L.chargeToCustomer = charge.checked;
+        draw();
+      });
+      bits.push(
+        el('label', { class: 'toggle-row' }, charge, el('span', {}, 'Charge it to the customer')),
+      );
+
+      if (L.chargeToCustomer) {
+        const amount = input({
+          type: 'number',
+          step: '0.01',
+          inputmode: 'decimal',
+          value: L.chargeAmount ?? after.logisticsCost,
+        });
+        amount.addEventListener('input', () => {
+          L.chargeAmount = amount.value === '' ? null : parseFloat(amount.value) || 0;
+        });
+        bits.push(field('Charge, excl. VAT', amount, 'Appears on the PDF as a line'));
+      }
+
+      bits.push(
+        el(
+          'p',
+          { class: `inline-note ${after.profit < 0 ? 'text-alert' : ''}` },
+          L.chargeToCustomer
+            ? `Passed on, the order totals ${currency(after.total, { code: quote.currency })} and keeps ${currency(after.profit, { code: quote.currency })} at ${percent(after.margin, 1)}.`
+            : `Absorbed, the order keeps ${currency(after.profit, { code: quote.currency })} at ${percent(after.margin, 1)} — ${currency(after.logisticsCost, { code: quote.currency })} off the bottom line.`,
+        ),
+      );
+    }
+
+    body.replaceChildren(...bits);
+  };
+
+  draw();
+  sheet('Shipping & customs', body, {
+    actions: [button('Done', { variant: 'primary', onclick: () => { closeSheet(); onDone(); } })],
+  });
+}
 
 /* -------------------------------------------------------------- cross-border */
 

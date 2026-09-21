@@ -110,18 +110,30 @@ export function priceQuote(quote) {
   const sum = (key) => round2(lines.reduce((t, l) => t + l[key], 0));
 
   const listGrossSubtotal = round2(lines.reduce((t, l) => t + l.listGross * l.qty, 0));
-  const grossTotal = sum('grossTotal');
-  const netTotal = sum('netTotal');
+  const goodsGross = sum('grossTotal');
+  const goodsNet = sum('netTotal');
+
+  // Getting the order to the customer and through customs is a cost of the
+  // order, not of any one garment, so it lands here rather than in a line.
+  const log = logisticsOf(quote);
+  // Charged on, it is revenue like anything else and carries VAT at the same
+  // rate; absorbed, it only ever comes off the profit.
+  const chargeNet = log.chargeToCustomer ? round2(log.charge) : 0;
+  const chargeGross = round2(chargeNet * (1 + vatRate));
+
+  const grossTotal = round2(goodsGross + chargeGross);
+  const netTotal = round2(goodsNet + chargeNet);
   const vat = round2(grossTotal - netTotal);
   const costTotal = sum('costTotal');
   const commission = sum('commission');
-  const profit = round2(netTotal - costTotal - commission);
+  const profit = round2(netTotal - costTotal - commission - log.cost);
 
   return {
     lines,
     units: lines.reduce((t, l) => t + l.qty, 0),
     listGrossSubtotal,
-    discountValue: round2(listGrossSubtotal - grossTotal),
+    discountValue: round2(listGrossSubtotal - goodsGross),
+    goodsGross,
     grossTotal,
     subtotal: netTotal,
     vat,
@@ -129,9 +141,50 @@ export function priceQuote(quote) {
     total: grossTotal,
     costTotal,
     commission,
+    logistics: log,
+    logisticsCost: log.cost,
+    logisticsCharge: chargeNet,
+    logisticsChargeGross: chargeGross,
     profit,
     margin: netTotal ? profit / netTotal : 0,
     markupOnCost: costTotal ? profit / costTotal : 0,
+  };
+}
+
+/**
+ * The shipping and customs sitting on a quotation, reduced to the two numbers
+ * the maths needs: what it costs us, and what we pass on.
+ *
+ * Import VAT is input tax the same way it is on a product — reclaimable when
+ * VAT-registered — so it is separated out rather than buried in the total.
+ */
+export function logisticsOf(quote, { reclaimImportVat = false } = {}) {
+  const l = quote?.logistics || null;
+  const shipping = round2(num(l?.shipping?.amount));
+  const duty = round2(num(l?.customs?.duty));
+  const importVat = round2(num(l?.customs?.importVat));
+  const otherTaxes = round2(num(l?.customs?.otherTaxes));
+  const brokerage = round2(num(l?.customs?.brokerage));
+
+  const customs = round2(duty + otherTaxes + brokerage + (reclaimImportVat ? 0 : importVat));
+  const cost = round2(shipping + customs);
+  // An unset charge means "pass it on at cost"; num() would read that as zero,
+  // which is the one answer that is never meant.
+  const asked = l?.chargeAmount;
+  const unset = asked === null || asked === undefined || asked === '';
+  const charge = l?.chargeToCustomer ? round2(unset ? cost : num(asked)) : 0;
+
+  return {
+    shipping,
+    duty,
+    importVat,
+    otherTaxes,
+    brokerage,
+    customs,
+    cost,
+    charge,
+    chargeToCustomer: Boolean(l?.chargeToCustomer),
+    hasEstimate: Boolean(l?.shipping?.amount || l?.customs?.duty || l?.customs?.brokerage),
   };
 }
 

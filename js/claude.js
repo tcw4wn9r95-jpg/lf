@@ -21,13 +21,15 @@
 
 const ENDPOINT = 'https://api.anthropic.com/v1/messages';
 const API_VERSION = '2023-06-01';
+/* Routes a policy decline onto another model inside the same call. */
+const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 
 export const CLAUDE_MODELS = [
-  { value: 'claude-sonnet-5', label: 'Sonnet — fast, cheap, plenty for this' },
-  { value: 'claude-opus-5', label: 'Opus — slower, for the awkward ones' },
+  { value: 'claude-opus-5', label: 'Opus — the best answer' },
+  { value: 'claude-sonnet-5', label: 'Sonnet — cheaper, quicker' },
 ];
 
-export const DEFAULT_MODEL = 'claude-sonnet-5';
+export const DEFAULT_MODEL = 'claude-opus-5';
 
 /* The shape we want back. Declared as a tool so the model fills fields rather
    than writing prose we then have to pick apart. */
@@ -61,7 +63,9 @@ const ESTIMATE_TOOL = {
       },
     },
     required: ['dutyRate', 'importVatRate', 'freightIn', 'confidence', 'reasoning'],
+    additionalProperties: false,
   },
+  strict: true,
 };
 
 const SYSTEM = `You are helping a small British cycling apparel company (La Fuga Limited, VAT registered in the UK) cost a made-to-order run of technical cycling kit.
@@ -105,35 +109,53 @@ function brief(job) {
   return lines.filter((l) => l !== null).join('\n');
 }
 
-/**
- * Ask for an estimate. Resolves with the tool input; throws with a message
- * written for someone holding a phone, not reading a stack trace.
+/*
+ * One request, made once and shared by every estimator here.
+ *
+ * Three things are deliberate. Thinking is left alone rather than switched off —
+ * classifying a garment and sizing a lane is reasoning work, and the current
+ * models think adaptively by default. `max_tokens` is generous because those
+ * thinking tokens come out of the same budget and a truncated answer is a wasted
+ * call. And the refusal fallback is asked for, but a rejection of that beta is
+ * caught and the call retried without it, so an account that does not have it
+ * gets an answer instead of an error.
  */
-export async function estimateLanded(job, { apiKey, model = DEFAULT_MODEL, signal } = {}) {
+async function ask({ apiKey, model, system, tool, prompt, signal }) {
   if (!apiKey) throw new Error('No API key set. Settings → Claude assist.');
+
+  const send = (withFallback) => {
+    const headers = {
+      'content-type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': API_VERSION,
+      // Without this the browser call is refused outright. It is an
+      // acknowledgement that the key is sitting on this device.
+      'anthropic-dangerous-direct-browser-access': 'true',
+    };
+    const body = {
+      model,
+      max_tokens: 16000,
+      system,
+      tools: [tool],
+      tool_choice: { type: 'tool', name: tool.name },
+      messages: [{ role: 'user', content: prompt }],
+    };
+    if (withFallback) {
+      headers['anthropic-beta'] = FALLBACK_BETA;
+      body.fallbacks = 'default';
+    }
+    return fetch(ENDPOINT, { method: 'POST', headers, signal, body: JSON.stringify(body) });
+  };
 
   let res;
   try {
-    res = await fetch(ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': API_VERSION,
-        // Without this the browser call is refused outright. It is an
-        // acknowledgement that the key is sitting on this device.
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
-      signal,
-      body: JSON.stringify({
-        model,
-        max_tokens: 2000,
-        system: SYSTEM,
-        tools: [ESTIMATE_TOOL],
-        tool_choice: { type: 'tool', name: ESTIMATE_TOOL.name },
-        messages: [{ role: 'user', content: brief(job) }],
-      }),
-    });
+    res = await send(true);
+    if (res.status === 400) {
+      const text = await res.clone().text();
+      // The account may not carry the fallback beta. That is not a reason to
+      // fail — ask again plainly.
+      if (/beta|fallback/i.test(text)) res = await send(false);
+    }
   } catch (err) {
     if (err?.name === 'AbortError') throw err;
     throw new Error('Could not reach Anthropic. Check the connection.');
@@ -154,10 +176,169 @@ export async function estimateLanded(job, { apiKey, model = DEFAULT_MODEL, signa
   }
 
   const body = await res.json();
-  const block = (body.content || []).find((c) => c.type === 'tool_use' && c.name === ESTIMATE_TOOL.name);
+  if (body.stop_reason === 'refusal') throw new Error('Claude declined this one. Try rewording the job.');
+  if (body.stop_reason === 'max_tokens') throw new Error('The answer ran long and was cut off. Try again.');
+
+  const block = (body.content || []).find((c) => c.type === 'tool_use' && c.name === tool.name);
   if (!block) throw new Error('Claude did not return an estimate. Try again.');
 
-  return { ...block.input, model, at: new Date().toISOString(), usage: body.usage || null };
+  return {
+    ...block.input,
+    // The fallback may have served this turn, so report what actually answered.
+    model: body.model || model,
+    at: new Date().toISOString(),
+    usage: body.usage || null,
+  };
+}
+
+/**
+ * Ask what it costs to land a unit. Resolves with the tool input; throws with a
+ * message written for someone holding a phone, not reading a stack trace.
+ */
+export async function estimateLanded(job, { apiKey, model = DEFAULT_MODEL, signal } = {}) {
+  return ask({ apiKey, model, signal, system: SYSTEM, tool: ESTIMATE_TOOL, prompt: brief(job) });
+}
+
+/* --------------------------------------------------------------- shipping */
+
+const SHIPPING_TOOL = {
+  name: 'record_shipping_quote',
+  description: 'Record what this carrier will charge to move this shipment.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      amount: { type: 'number', description: 'Total cost of the shipment in the quote currency, excluding VAT.' },
+      service: { type: 'string', description: 'The service level priced, e.g. "International Priority" or "Economy Select".' },
+      chargeableKg: { type: 'number', description: 'The chargeable weight the carrier would bill — the greater of actual and volumetric.' },
+      transitDays: { type: 'string', description: 'Door-to-door transit, e.g. "2-3 working days".' },
+      surcharges: { type: 'string', description: 'Named surcharges folded into the amount — fuel, remote area, residential, peak.' },
+      confidence: { type: 'string', enum: ['high', 'medium', 'low'], description: 'How sure you are. Low is a fine answer.' },
+      reasoning: { type: 'string', description: 'Two or three sentences: the service, how the chargeable weight was arrived at, and what drives the price on this lane.' },
+      caveats: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'What would move the number — account discounts, dimensions you had to assume, residential delivery, dangerous goods.',
+      },
+    },
+    required: ['amount', 'confidence', 'reasoning'],
+    additionalProperties: false,
+  },
+  strict: true,
+};
+
+const SHIPPING_SYSTEM = `You are pricing a shipment for a small British cycling apparel company (La Fuga Limited) sending a made-to-order kit run to a customer.
+
+Quote it the way a freight desk would:
+
+- Price the named carrier's realistic published rate for the lane, at list, then say in the caveats what a negotiated account typically takes off it. Small shippers on an account usually see 30-50% off express list rates, so an unqualified list price flatters the cost.
+- Cycling apparel is low density. Work out the volumetric weight as well as the actual weight and bill whichever is greater — express carriers divide by 5000 for cm/kg. Cartons of folded kit typically run 0.10-0.14 kg per litre, so volumetric usually wins on express.
+- Fold in the surcharges that actually appear on the invoice: fuel (a percentage that moves), remote area, residential delivery, and peak season where it applies. Name them.
+- For a forwarder rather than an integrator, price the mode honestly: air freight has a minimum chargeable weight and airport-to-airport pricing plus handling at both ends; sea freight is LCL by cubic metre with a minimum, and is not worth it below a few cubic metres.
+- Transit time is part of the quote. Say it.
+
+Be accurate rather than reassuring. A wide range means the midpoint, confidence low, and the range in the caveats. Never invent a precise figure to look authoritative, and never quote a rate you would not defend to the person paying it.`;
+
+function shippingBrief(job) {
+  const lines = [
+    `Carrier: ${job.carrierLabel}`,
+    `From: ${job.originPostcode || 'not given'}${job.originCountryName ? `, ${job.originCountryName}` : ''}`,
+    `To: ${job.destPostcode || 'not given'}${job.destCountryName ? `, ${job.destCountryName}` : ''}`,
+    job.incoterm ? `Incoterm: ${job.incoterm}` : null,
+    `Currency: ${job.currency}`,
+    '',
+    'The shipment:',
+    `  ${job.units} garments across ${job.cartons} carton${job.cartons === 1 ? '' : 's'}`,
+    `  Goods weight ${job.goodsKg} kg, gross weight with cartons ${job.grossKg} kg`,
+    job.dimensions ? `  Carton size given as ${job.dimensions}` : '  Carton size not given — assume a standard apparel carton and say what you assumed.',
+    '',
+    'What is in it:',
+    ...job.items.map((i) => `  ${i.qty} x ${i.name}`),
+    '',
+    job.declaredValue ? `Declared value of the goods: ${job.currency} ${job.declaredValue.toFixed(2)}.` : null,
+    'Price this shipment.',
+  ];
+  return lines.filter((l) => l !== null).join('\n');
+}
+
+/** What a carrier will charge to move the goods on this quotation. */
+export async function estimateShipping(job, { apiKey, model = DEFAULT_MODEL, signal } = {}) {
+  return ask({ apiKey, model, signal, system: SHIPPING_SYSTEM, tool: SHIPPING_TOOL, prompt: shippingBrief(job) });
+}
+
+/* ---------------------------------------------------------------- customs */
+
+const CUSTOMS_TOOL = {
+  name: 'record_customs_estimate',
+  description: 'Record the duty, import taxes and clearance charges on this shipment.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      duty: { type: 'number', description: 'Total customs duty on the whole shipment, in the quote currency.' },
+      importVat: { type: 'number', description: 'Total import VAT or GST on the whole shipment. 0 where none is charged at import.' },
+      otherTaxes: { type: 'number', description: 'Any other tax on entry — excise, provincial tax, merchandise processing. 0 if none.' },
+      brokerage: { type: 'number', description: 'Customs clearance, entry preparation, disbursement and handling fees for the shipment.' },
+      dutyRate: { type: 'number', description: 'The effective ad valorem duty rate applied, as a decimal fraction.' },
+      importVatRate: { type: 'number', description: 'The import VAT/GST rate applied, as a decimal fraction.' },
+      customsValue: { type: 'number', description: 'The value duty was calculated on, in the quote currency.' },
+      valuationBasis: { type: 'string', enum: ['cif', 'fob'], description: 'What the destination levies duty on.' },
+      hsCodes: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'The commodity codes used, one per distinct garment type, as "6110.30 — long sleeve jersey".',
+      },
+      confidence: { type: 'string', enum: ['high', 'medium', 'low'], description: 'How sure you are. Low is a fine answer.' },
+      reasoning: { type: 'string', description: 'Two or three sentences: the classification, the trade treatment between origin and destination, and how the customs value was built.' },
+      caveats: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'What would change it — rules of origin evidence, de minimis, fibre composition, whether the buyer can reclaim the import VAT.',
+      },
+    },
+    required: ['duty', 'importVat', 'brokerage', 'confidence', 'reasoning'],
+    additionalProperties: false,
+  },
+  strict: true,
+};
+
+const CUSTOMS_SYSTEM = `You are working out what customs will charge on a shipment of technical cycling apparel for a small British company (La Fuga Limited, VAT registered in the UK).
+
+Work it for the whole shipment, not per unit, like a customs broker preparing an entry:
+
+- Classify each distinct garment. Cycling kit is mostly knitted man-made fibre: jerseys usually 6110.30 or 6114.30, bib shorts with a chamois 6112.20 or 6114.30, gilets and wind vests 6110.30 or 6113.00 where laminated, caps 6505.00, socks 6115.30. Say which you used.
+- Apply the real trade treatment between the country of origin of the goods and the destination — the country the garments were MADE in, not the country they are shipped from. A Chinese-made jersey sent out of an EU warehouse does not get EU preferential origin, and saying so is part of the job.
+- Build the customs value the way the destination does: most of the world levies on CIF, the United States on FOB. State which you used and what went into it.
+- Import VAT or GST is charged on the customs value plus the duty. Where the destination charges none at import, return 0 rather than inventing one.
+- Include realistic clearance and disbursement fees for the carrier or a broker on that lane.
+- Where a destination charges duty by weight rather than value, convert to an equivalent ad valorem rate and say that is what you did.
+
+Be accurate rather than reassuring. A wide range means the midpoint, confidence low, and the range in the caveats. Never invent a precise rate to look authoritative — a broker signs off the entry, not you.`;
+
+function customsBrief(job) {
+  const lines = [
+    `Goods made in: ${job.originName || 'unknown'}`,
+    `Shipping from: ${job.shipsFromName || job.originName || 'unknown'}`,
+    `Importing into: ${job.destCountryName}`,
+    job.incoterm ? `Incoterm: ${job.incoterm} — ${job.incotermSummary}` : null,
+    `Currency: ${job.currency}`,
+    '',
+    'The shipment:',
+    ...job.items.map(
+      (i) => `  ${i.qty} x ${i.name}${i.category ? ` (${i.category})` : ''} — ${job.currency} ${i.unitValue.toFixed(2)} each, ${job.currency} ${i.lineValue.toFixed(2)} the line`,
+    ),
+    '',
+    `Declared goods value: ${job.currency} ${job.declaredValue.toFixed(2)}`,
+    job.freight ? `Freight on this shipment: ${job.currency} ${job.freight.toFixed(2)}` : null,
+    job.insurance ? `Insurance: ${job.currency} ${job.insurance.toFixed(2)}` : null,
+    `Gross weight: ${job.grossKg} kg across ${job.cartons} carton${job.cartons === 1 ? '' : 's'}`,
+    '',
+    'Give me what customs will charge on entry.',
+  ];
+  return lines.filter((l) => l !== null).join('\n');
+}
+
+/** What the border will charge on the goods on this quotation. */
+export async function estimateCustoms(job, { apiKey, model = DEFAULT_MODEL, signal } = {}) {
+  return ask({ apiKey, model, signal, system: CUSTOMS_SYSTEM, tool: CUSTOMS_TOOL, prompt: customsBrief(job) });
 }
 
 /** Fold an estimate into the stored terms, leaving anything it skipped alone. */
