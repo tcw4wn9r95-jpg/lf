@@ -132,7 +132,9 @@ function migrate(saved) {
     company: { ...base.company, ...(saved.company || {}), bank: { ...base.company.bank, ...(saved.company?.bank || {}) } },
     settings: { ...base.settings, ...(saved.settings || {}) },
     financials: saved.financials || {},
-    customProducts: saved.customProducts || [],
+    // Made-to-order products used to inherit the base garment's category and
+    // scatter through the catalogue. They belong together, under Custom.
+    customProducts: (saved.customProducts || []).map((p) => (p.custom && p.category !== 'custom' ? { ...p, category: 'custom' } : p)),
     // Quotations written before prices could be shown either way were inclusive
     // of VAT; pin them there so a reprint matches what the customer was sent.
     quotes: (saved.quotes || []).map((q) => (q.priceDisplay ? q : { ...q, priceDisplay: 'incl' })),

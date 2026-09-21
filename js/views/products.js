@@ -52,7 +52,7 @@ export default function productsView({ navigate }) {
     el(
       'div',
       { class: 'btn-row' },
-      button('Customise a product', { variant: 'primary', onclick: () => chooseBase() }),
+      button('Customise a product', { variant: 'primary', onclick: () => customiseProduct() }),
       button('Blank product', { onclick: () => editProduct(null) }),
     ),
   );
@@ -120,11 +120,9 @@ function openProduct(id) {
         onclick: () => {
           closeSheet();
           if (!p.basedOn) return editProduct(p);
-          const base = products().find((x) => x.id === p.basedOn);
-          // The base can be deleted out from under a custom product; fall back to
-          // picking a new one rather than failing.
-          if (base) buildCustom(base, p);
-          else chooseBase(p);
+          // The base can be deleted out from under a custom product; the workflow
+          // falls back to picking a new one rather than failing.
+          customiseProduct({ existing: p });
         },
       }),
     ],
@@ -540,8 +538,21 @@ function baseName(id) {
   return base ? displayName(base) : 'a deleted product';
 }
 
+/**
+ * Run the made-to-order workflow from wherever it is needed — the catalogue, or
+ * a quotation that wants a product which does not exist yet.
+ *
+ * `onSaved` gets the saved product, so a quote can put it straight on the line
+ * it was being built for rather than sending you to Products to find it.
+ */
+export function customiseProduct({ existing = null, onSaved = null } = {}) {
+  const base = existing?.basedOn ? products().find((p) => p.id === existing.basedOn) : null;
+  if (base) buildCustom(base, existing, onSaved);
+  else chooseBase(existing, onSaved);
+}
+
 /** Pick the product whose cost structure the custom one inherits. */
-function chooseBase(existing = null) {
+function chooseBase(existing = null, onSaved = null) {
   const withCosts = products().filter((p) => p.hasFinancials && !p.basedOn);
   if (!withCosts.length) {
     return toast('No products with costs to base one on yet.', 'alert');
@@ -563,7 +574,7 @@ function chooseBase(existing = null) {
             type: 'button',
             onclick: () => {
               closeSheet();
-              buildCustom(p, existing);
+              buildCustom(p, existing, onSaved);
             },
           },
           el(
@@ -596,7 +607,7 @@ function chooseBase(existing = null) {
  * insurance and import VAT all move with them. On a £10 customisation into the
  * UK that is another £4 of cost that would otherwise go unnoticed.
  */
-function buildCustom(base, existing = null) {
+function buildCustom(base, existing = null, onSaved = null) {
   const { settings } = load();
 
   const nameInput = input({
@@ -996,7 +1007,9 @@ function buildCustom(base, existing = null) {
                 name,
                 code: codeInput.value.trim(),
                 maker: base.maker || '',
-                category: base.category,
+                // Made-to-order work groups under Custom rather than scattering
+                // through the catalogue it was based on.
+                category: 'custom',
                 custom: true,
                 basedOn: base.id,
               });
@@ -1027,6 +1040,7 @@ function buildCustom(base, existing = null) {
 
           closeSheet();
           toast(`${name} priced at ${currency(priced.gross)}.`);
+          if (onSaved) onSaved(products().find((x) => x.id === id));
         },
       }),
     ],

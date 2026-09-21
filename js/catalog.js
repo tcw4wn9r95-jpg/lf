@@ -18,6 +18,9 @@ export const CATEGORIES = [
   { id: 'baselayer', label: 'Base Layers' },
   { id: 'jacket', label: 'Jackets' },
   { id: 'accessories', label: 'Accessories' },
+  /* Made-to-order work. Nothing ships in this category — it fills up as club
+     jobs get priced, which is why it sits at the end. */
+  { id: 'custom', label: 'Custom' },
 ];
 
 export const CATALOG = [

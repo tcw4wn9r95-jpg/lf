@@ -2,6 +2,7 @@
 
 import { CATEGORIES, displayName } from '../catalog.js';
 import { load, products, saveQuote, deleteQuote, nextQuoteRef, uid, saveSale } from '../store.js';
+import { customiseProduct } from './products.js';
 import {
   priceQuote, breakEvenDiscount, maxDiscountForMargin, marginVerdict, VERDICT_TONE,
   VAT_PRESETS, PRICE_DISPLAY, suggestedVatNote,
@@ -582,7 +583,7 @@ function editClient(quote, onDone) {
 }
 
 function pickProducts(quote, onChange) {
-  const all = products();
+  let all = products();
   const search = input({ type: 'search', placeholder: 'Search products', autocapitalize: 'off' });
   const results = el('div', { class: 'list' });
   let category = 'all';
@@ -656,8 +657,26 @@ function pickProducts(quote, onChange) {
     ),
   );
 
+  // A club job usually needs a garment that does not exist yet. Build it here,
+  // on top of the sheet, and it lands on the quotation the moment it is saved —
+  // no trip to Products and back to find what you just made.
+  const customise = button('+ Customise a product', {
+    variant: 'ghost',
+    onclick: () =>
+      customiseProduct({
+        onSaved: (p) => {
+          if (!p) return;
+          addLine(quote, p);
+          onChange();
+          all = products();
+          draw();
+          toast(`${displayName(p)} added to the quotation.`);
+        },
+      }),
+  });
+
   draw();
-  sheet('Add items', el('div', {}, field('Search', search), chips, results), {
+  sheet('Add items', el('div', {}, field('Search', search), chips, el('div', { class: 'btn-row' }, customise), results), {
     actions: [button('Done', { variant: 'primary', onclick: () => closeSheet() })],
   });
 }

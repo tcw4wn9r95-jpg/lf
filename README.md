@@ -68,6 +68,13 @@ whole model. Settings writes that template for you. See
 and lets you add what this job needs on top — sublimation artwork, a pad upgrade,
 a woven label, artwork setup — as one-tap presets or your own lines.
 
+It starts from either end. On **Products** it builds a product and files it under
+**Custom**, its own category rather than scattered through the catalogue it was
+based on. Inside a quotation, **Add items → Customise a product** runs the same
+workflow on top of the sheet and puts the finished garment straight on the
+quotation the moment you save — no trip to Products and back to find what you
+just made. Either way it is one product, in one place, priced the same way.
+
 Those extras are **made at the factory**, so they go inside the FOB value the
 customs declaration is based on, and insurance, duty and import VAT all rise with
 them. £10.50 of customisation on a Chinese-made bib adds £14.38 landed, not
@@ -118,9 +125,9 @@ key lives in this phone's storage, goes straight to Anthropic (there is no serve
 here to hide it behind), and is deliberately **left out of backups**. Use one with
 a spend limit you can revoke.
 
-Saved, a custom product joins the catalogue and quotes like anything else, with
-the terms it was costed under stored alongside, so reopening it in six months
-still adds up the same way. **The quotation shows only the price** — name,
+Saved, a custom product lands under **Custom** and quotes like anything else,
+with the terms it was costed under stored alongside, so reopening it in six
+months still adds up the same way. **The quotation shows only the price** — name,
 reference, quantity, unit, amount. None of the breakdown, and not the factory's
 name, reaches the customer.
 
