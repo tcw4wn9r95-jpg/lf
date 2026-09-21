@@ -117,7 +117,9 @@ export function priceQuote(quote) {
 
   // Getting the order to the customer and through customs is a cost of the
   // order, not of any one garment, so it lands here rather than in a line.
-  const log = logisticsOf(quote);
+  // The reclaim setting is copied onto the quote the way the VAT rate and the
+  // margin floor are, so a saved quotation still adds up the way it was quoted.
+  const log = logisticsOf(quote, { reclaimImportVat: Boolean(quote.reclaimImportVat) });
   // Charged on, it is revenue like anything else and carries VAT at the same
   // rate; absorbed, it only ever comes off the profit.
   const chargeNet = log.chargeToCustomer ? round2(log.charge) : 0;
@@ -429,20 +431,29 @@ export function costStack(product, { reclaimImportVat = false } = {}) {
       lines.importVat = round2((fob + lines.freightIn + lines.insurance + lines.duty) * rates.importVat);
     }
 
+    // Onward delivery is deliberately NOT here. Getting a garment from our own
+    // door to a customer is a cost of the order, priced on the order, where the
+    // real weight and destination are — leaving it in the unit cost means the
+    // quotation pays for the same leg twice.
     const importCosts = round2(
-      lines.freightIn + lines.freightOut + lines.insurance + lines.brokerage + lines.duty + lines.importVat,
+      lines.freightIn + lines.insurance + lines.brokerage + lines.duty + lines.importVat,
     );
     // Import VAT is input tax: a VAT-registered company reclaims it, so it is a
     // cash timing cost rather than a cost of goods. Off by default to match the sheet.
     const recovered = reclaimImportVat ? lines.importVat : 0;
 
+    const landed = round2(fob + importCosts - recovered);
     return {
       lines,
       fob,
       importCosts,
       importVat: lines.importVat,
       recovered,
-      landed: round2(fob + importCosts - recovered),
+      /* What a unit costs sitting on our own shelf, cleared and paid for. */
+      landed,
+      onwardDelivery: lines.freightOut,
+      /* The model's original figure, delivery included, kept for comparison. */
+      deliveredUk: round2(landed + lines.freightOut),
     };
   };
 

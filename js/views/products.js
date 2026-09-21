@@ -149,7 +149,6 @@ function costStackRows(p, stack, { includeTotal = true } = {}) {
     ledgerRow(stack.customisations.length ? 'Ex works — factory door' : 'Ex works', currency(stack.exw), 'is-subtotal'),
   );
   line('freightIn');
-  line('freightOut');
   line('insurance');
   line('brokerage');
   line('duty');
@@ -158,9 +157,7 @@ function costStackRows(p, stack, { includeTotal = true } = {}) {
   if (stack.recovered) {
     rows.push(ledgerRow('Less import VAT reclaimed', `-${currency(stack.recovered)}`, 'is-good'));
   }
-  if (includeTotal) {
-    rows.push(ledgerRow('Landed into the UK', currency(stack.landed), 'is-subtotal'));
-  }
+  if (includeTotal) rows.push(ledgerRow('Landed into stock', currency(stack.landed), 'is-subtotal'));
   return rows;
 }
 
@@ -181,8 +178,20 @@ function costStackTable(p, { stack }, settings) {
   // The rows already carry the customisation inside the FOB value, so the only
   // thing left to add is the bottom line.
   costStackRows(p, stack, { includeTotal: false }).forEach((r) => tbody.appendChild(r));
-  tbody.appendChild(ledgerRow('Landed into the UK', currency(stack.landed), 'is-total'));
+  tbody.appendChild(ledgerRow('Landed into stock', currency(stack.landed), 'is-total'));
   out.appendChild(el('table', { class: 'ledger' }, tbody));
+
+  // Named below the total on purpose: sending one out is a cost of the order,
+  // which a quotation prices from its own destination and weight.
+  if (stack.onwardDelivery) {
+    out.appendChild(
+      el(
+        'p',
+        { class: 'inline-note' },
+        `The model also carried ${currency(stack.onwardDelivery)} of ${costLineLabel('freightOut', p).toLowerCase()} in this unit. It is not here: a quotation prices its own delivery from the whole order, so leaving it in would charge that leg twice.`,
+      ),
+    );
+  }
 
   // Where the money actually goes, as a share of unit cost. Only what the
   // incoterm leaves with us counts — a line the buyer pays is not our cost.
@@ -190,7 +199,7 @@ function costStackTable(p, { stack }, settings) {
   const total = stack.landed || 1;
   const share = (v) => Math.max(0, (v / total) * 100);
   const made = stack.exw - stack.customisationTotal;
-  const shipping = mine('freightIn') + mine('freightOut') + mine('brokerage');
+  const shipping = mine('freightIn') + mine('brokerage');
   const border = mine('duty') + mine('insurance');
   const importVat = Math.max(0, mine('importVat') - stack.recovered);
 

@@ -114,6 +114,7 @@ function blankQuote() {
     },
     vatRate: settings.vatRate,
     minMargin: settings.minMargin,
+    reclaimImportVat: settings.reclaimImportVat,
     priceDisplay: settings.priceDisplay,
     vatNote: settings.vatNote,
     discount: 0,
@@ -1055,12 +1056,29 @@ function crossBorderPanel(quote, { onChange, onApply }) {
       );
     });
 
-  // Costed on cheaper terms than the quote promises: the gap is ours to eat.
-  const costedTerms = [...new Set(lineProducts.map((p) => p.landedTerms?.incoterm).filter(Boolean))];
-  if (quote.incoterm === 'DDP' && costedTerms.length && !costedTerms.includes('DDP')) {
-    warnings.push(
-      `You are quoting DDP but the ${costedTerms.join('/')} costing behind it stops short of duty and import VAT. That difference comes out of this margin.`,
-    );
+  // Goods brought in and cleared here, then sent straight back out, pay duty on
+  // both sides of the same journey. Legal, avoidable, and easy not to notice.
+  const from = quote.shipsFrom || SELLER_COUNTRY;
+  const foreignMade = [...new Set(lineProducts.map((p) => originCode(p)).filter((c) => c && c !== from))];
+  if (from === SELLER_COUNTRY && foreignMade.length && quote.client.country && quote.client.country !== SELLER_COUNTRY) {
+    const dutyPaid = lineProducts.some((p) => (p.breakdown?.duty || 0) > 0);
+    if (dutyPaid) {
+      warnings.push(
+        `These were made in ${foreignMade.map((c) => country(c)?.name || c).join(' and ')}, brought in and cleared here, and are now going out again — so duty is paid on both sides of the same goods. Shipping direct from the factory avoids it, and customs warehousing or inward processing relief can too.`,
+      );
+    }
+  }
+
+  // Import VAT is reclaimable for a registered business, so counting it as a
+  // cost of goods quietly understates every margin in the app.
+  const { company } = load();
+  if (company?.vatNumber && !quote.reclaimImportVat) {
+    const vatInCost = lineProducts.some((p) => (p.breakdown?.importVat || 0) > 0);
+    if (vatInCost) {
+      warnings.push(
+        `You are VAT registered but import VAT is being counted as a cost of goods. If you reclaim it, this quotation is understating its own margin — the switch is in Settings under Unit economics.`,
+      );
+    }
   }
 
   const bits = [

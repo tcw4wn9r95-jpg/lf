@@ -59,9 +59,11 @@ it in one tap:
 > register for VAT there.
 > · For a business customer in Ireland, their VAT number belongs on the document.
 
-It also catches the mismatches between a costing and a quote: a line costed to
-land in one country and quoted to a customer in another, or a DDP price built on
-an FOB costing that stops short of duty. The PDF then carries what a cross-border
+It also catches what quietly costs money: goods made abroad, cleared into the UK
+and then sent straight back out pay duty on **both** sides of the same journey,
+which shipping direct or customs warehousing avoids. And import VAT counted as a
+cost of goods by a VAT-registered business understates every margin in the app —
+it says so, and points at the switch. The PDF then carries what a cross-border
 document needs — delivery terms in Incoterms 2020 form, the customer's VAT
 number, the destination country in the address, and the EORI in the footer.
 
@@ -147,6 +149,10 @@ prices the entry — duty, import VAT, other taxes and clearance, with the
 commodity codes and the customs value it worked from. It reads the origin off
 the products, so a Chinese-made jersey shipped out of an EU warehouse gets no
 EU preference, which is the trap worth catching.
+
+**Onward delivery is not in the unit cost.** The financial model folds a pound
+of UK delivery into every garment; a quotation that also prices its own shipping
+would pay for that leg twice. The product screen says so where it used to sit.
 
 **Which cost the lines carry follows where the goods leave from.** Out of your
 own stock they have already been brought in and cleared, so the line carries the
