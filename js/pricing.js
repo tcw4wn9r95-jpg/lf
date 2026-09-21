@@ -181,7 +181,9 @@ export const PRICE_DISPLAY = {
 /** Wording suggested for a rate, editable and only used when the note is empty. */
 export function suggestedVatNote(vatRate, company) {
   if (!vatRate) {
-    return 'Zero-rated supply. VAT is accounted for by the customer under the reverse charge.';
+    // "Reverse charge" is the wording for services, not for goods leaving the
+    // country — the Shipping & VAT panel writes the precise line for the route.
+    return 'No UK VAT is charged on this supply. Any import duty and local VAT on arrival are the importer’s.';
   }
   const number = company?.vatNumber ? ` VAT ${company.vatNumber}.` : '';
   return `Prices are shown excluding and including VAT at ${(vatRate * 100).toFixed(0)}%.${number}`;

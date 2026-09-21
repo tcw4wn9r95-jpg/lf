@@ -43,6 +43,32 @@ Each row reads £116.00 → £87.00 · 25% off · 46% margin with a **thin** or 
 cost** tag. Open a line and it gives you the number to negotiate with: *most you
 can give at your 30% floor is 43%, break-even at 60%.*
 
+### Selling across a border
+The client's **country** is not decoration — it decides whether UK VAT belongs on
+the quotation at all. Set it, say where the goods physically leave from, and pick
+the incoterm, and **Shipping & VAT** works out the treatment and offers to apply
+it in one tap:
+
+> **Outside UK VAT — Spain to Ireland.** No UK VAT applies, but this quotation is
+> set to 20%.
+>
+> · These goods travel Spain to Ireland without entering the UK, so this is not a
+> UK export. The supply falls under Spain/Ireland rules and may need a VAT
+> registration there.
+> · Quoting DDP makes you importer of record in Ireland. That can oblige you to
+> register for VAT there.
+> · For a business customer in Ireland, their VAT number belongs on the document.
+
+It also catches the mismatches between a costing and a quote: a line costed to
+land in one country and quoted to a customer in another, or a DDP price built on
+an FOB costing that stops short of duty. The PDF then carries what a cross-border
+document needs — delivery terms in Incoterms 2020 form, the customer's VAT
+number, the destination country in the address, and the EORI in the footer.
+
+It is a prompt, not advice. Exports turn on holding proof the goods left the UK,
+DDP can create obligations abroad, and Northern Ireland has its own regime —
+anything unusual is worth an accountant's eye first.
+
 **VAT is yours to set per quotation.** Tap *None*, *UK 20%* or *ES 21%* (or type a
 rate), choose how the quotation reads — both bases, excluding VAT, or including —
 and write the note that prints under the totals. Leave the note empty and one is
@@ -172,7 +198,7 @@ js/
   catalog.js            products — names only, no money
   pricing.js            margin/markup/discount/VAT maths
   sync.js               CSV parsing and the pull-from-a-sheet route
-  landed.js             incoterms, destinations and what duty they charge
+  landed.js             incoterms, destinations, duty and the VAT on a supply
   claude.js             optional landed-cost estimates, key stays on the phone
   pdf.js                the branded quotation
   fonts.js              resolves Gotham/Hakira, falls back to the stand-in

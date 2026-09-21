@@ -13,6 +13,7 @@
 import { LOCKUP_PNG, LOCKUP_ASPECT } from '../assets/brand-marks.js';
 import { registerPdfFonts } from './fonts.js';
 import { priceQuote, suggestedVatNote } from './pricing.js';
+import { INCOTERMS, country, SELLER_COUNTRY } from './landed.js';
 import { fmtDate } from './deadlines.js';
 
 /* A4 in points. */
@@ -58,8 +59,9 @@ export function buildQuotePdf({ quote, company, settings }) {
   y = lineTable(doc, y, totals, cur, quote);
   const totalsGeom = totalsBlock(doc, y, totals, cur, quote, company);
   // Terms tuck into the empty column beside the totals when they fit there.
-  terms(doc, totalsGeom, quote, settings);
-  footers(doc, company);
+  const afterTerms = terms(doc, totalsGeom, quote, settings);
+  remarks(doc, afterTerms, quote);
+  footers(doc, company, quote);
 
   return doc;
 }
@@ -125,7 +127,16 @@ function parties(doc, y, quote, company) {
   leftY = wrap(doc, client.name || 'Client', M.left, leftY, colW, 14);
 
   setType(doc, 9, 'normal', MUTED);
-  [client.contact, client.email, client.phone, ...splitLines(client.address)]
+  [
+    client.contact,
+    client.email,
+    client.phone,
+    ...splitLines(client.address),
+    // The destination country belongs in the address once goods cross a border.
+    client.country && client.country !== SELLER_COUNTRY ? country(client.country)?.name : null,
+    // A zero-rated supply to a business abroad has to name their VAT number.
+    client.vatNumber ? `VAT ${client.vatNumber}` : null,
+  ]
     .filter(Boolean)
     .forEach((line) => {
       leftY = wrap(doc, line, M.left, leftY, colW, 11.5);
@@ -321,12 +332,13 @@ function totalsBlock(doc, y, totals, cur, quote, company) {
 
 function terms(doc, totalsGeom, quote, settings) {
   const blocks = [
+    ['Delivery terms', deliveryTerms(quote)],
     ['Lead time', quote.leadTime || settings.leadTime],
     ['Payment terms', quote.paymentTerms || settings.paymentTerms],
     ['Notes', quote.notes || settings.footerNote],
   ].filter(([, v]) => v);
 
-  if (!blocks.length) return;
+  if (!blocks.length) return totalsGeom.endY;
 
   // Measure first: a padded guess pushes three short lines onto a page of their own.
   setType(doc, 9, 'normal', INK);
@@ -350,14 +362,59 @@ function terms(doc, totalsGeom, quote, settings) {
     setType(doc, 9, 'normal', INK);
     y = wrap(doc, body, M.left, y + 14, width, 12.5) + 10;
   });
+
+  // The terms may have sat beside the totals; whatever comes next has to clear both.
+  return Math.max(y, totalsGeom.endY);
 }
 
-function footers(doc, company) {
+/** The incoterm, written the way a forwarder reads it: code, name, place. */
+function deliveryTerms(quote) {
+  const term = INCOTERMS.find((i) => i.code === quote.incoterm);
+  if (!term) return '';
+  const place = country(quote.client?.country)?.name;
+  return `${term.code} — ${term.name}${place ? `, ${place}` : ''} (Incoterms 2020).`;
+}
+
+/**
+ * Anything else the quotation has to say, in full and at full width. Kept out of
+ * the narrow column beside the totals because remarks tend to be the part that
+ * actually needs reading.
+ */
+function remarks(doc, y, quote) {
+  const body = String(quote.remarks || '').trim();
+  if (!body) return y;
+
+  const paragraphs = body.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  setType(doc, 9, 'normal', INK);
+  const height = paragraphs.reduce((t, p) => t + doc.splitTextToSize(p, CONTENT_W).length * 12.5 + 6, 14);
+
+  if (y + height > PAGE.h - M.bottom - 2) {
+    doc.addPage();
+    y = continuationHead(doc, quote);
+  } else {
+    y += 8;
+    rule(doc, y - 10, RULE, 0.4);
+  }
+
+  label(doc, 'Remarks', M.left, y);
+  y += 14;
+  paragraphs.forEach((p) => {
+    setType(doc, 9, 'normal', INK);
+    y = wrap(doc, p, M.left, y, CONTENT_W, 12.5) + 6;
+  });
+  return y;
+}
+
+function footers(doc, company, quote) {
   const pages = doc.getNumberOfPages();
+  // The EORI only matters once goods cross a border, and then it matters a lot —
+  // it is the number the customer's forwarder will ask for.
+  const crossing = Boolean(quote?.client?.country) && quote.client.country !== SELLER_COUNTRY;
   const legal = [
     company.name,
     company.companyNumber ? `Registered in England & Wales No. ${company.companyNumber}` : null,
     company.vatNumber ? `VAT ${company.vatNumber}` : null,
+    crossing && company.eori ? `EORI ${company.eori}` : null,
   ]
     .filter(Boolean)
     .join('  ·  ');

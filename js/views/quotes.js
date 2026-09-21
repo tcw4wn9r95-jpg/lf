@@ -3,6 +3,7 @@
 import { CATEGORIES, displayName } from '../catalog.js';
 import { load, products, saveQuote, deleteQuote, nextQuoteRef, uid, saveSale } from '../store.js';
 import { customiseProduct } from './products.js';
+import { COUNTRIES, INCOTERMS, country, supplyTreatment, SELLER_COUNTRY, originCode } from '../landed.js';
 import {
   priceQuote, breakEvenDiscount, maxDiscountForMargin, marginVerdict, VERDICT_TONE,
   VAT_PRESETS, PRICE_DISPLAY, suggestedVatNote,
@@ -85,9 +86,14 @@ function blankQuote() {
     date: todayIso(),
     validUntil: addDays(todayIso(), settings.quoteValidDays || 30),
     status: 'draft',
-    client: { name: '', contact: '', email: '', phone: '', address: '' },
+    client: { name: '', contact: '', email: '', phone: '', address: '', country: '', vatNumber: '' },
     subject: '',
     currency: settings.currency,
+    /* Where the goods physically leave from, which decides whether this is a UK
+       export at all: our own stock, or straight off the factory floor. */
+    shipsFrom: SELLER_COUNTRY,
+    incoterm: '',
+    remarks: '',
     vatRate: settings.vatRate,
     minMargin: settings.minMargin,
     priceDisplay: settings.priceDisplay,
@@ -113,11 +119,34 @@ function editor(id, navigate) {
   const wrap = el('div');
   const totalsSlot = el('div');
   const linesSlot = el('div');
+  const pricingSlot = el('div');
+  const crossSlot = el('div');
+
+  // The cross-border panel reads the VAT rate and the lines, so it refreshes
+  // whenever either moves. Pricing is only redrawn when something else changes
+  // the rate underneath it, or a half-typed VAT note would vanish mid-keystroke.
+  const redrawCross = () => {
+    crossSlot.replaceChildren(
+      crossBorderPanel(quote, {
+        onChange: () => redrawCross(),
+        onApply: () => {
+          pricingSlot.replaceChildren(pricingPanel(quote, onPricingChange));
+          redrawCross();
+          redrawTotals();
+        },
+      }),
+    );
+  };
 
   const redrawTotals = () => {
     totalsSlot.replaceChildren(totalsPanel(quote));
-    linesSlot.replaceChildren(linesPanel(quote, redrawTotals));
+    linesSlot.replaceChildren(linesPanel(quote, onPricingChange));
   };
+
+  function onPricingChange() {
+    redrawTotals();
+    redrawCross();
+  }
 
   wrap.appendChild(el('h1', { class: 'page-title' }, existing ? quote.ref : 'New quotation'));
   wrap.appendChild(el('p', { class: 'page-sub' }, existing ? `Saved ${quote.date}` : `Reference ${quote.ref}`));
@@ -129,7 +158,16 @@ function editor(id, navigate) {
     clientSlot.replaceChildren(
       el(
         'button',
-        { class: 'row', type: 'button', onclick: () => editClient(quote, drawClient) },
+        {
+          class: 'row',
+          type: 'button',
+          onclick: () =>
+            editClient(quote, () => {
+              drawClient();
+              // The country may have changed, which changes the VAT treatment.
+              redrawCross();
+            }),
+        },
         el(
           'div',
           { class: 'row-main' },
@@ -147,13 +185,18 @@ function editor(id, navigate) {
   drawClient();
   wrap.appendChild(clientSlot);
 
+  /* Where it is going, and on whose terms */
+  wrap.appendChild(sectionTitle('Shipping & VAT'));
+  wrap.appendChild(crossSlot);
+
   /* Pricing controls */
   wrap.appendChild(sectionTitle('Pricing'));
-  wrap.appendChild(pricingPanel(quote, redrawTotals));
+  pricingSlot.appendChild(pricingPanel(quote, onPricingChange));
+  wrap.appendChild(pricingSlot);
 
   /* Items */
   wrap.appendChild(
-    sectionTitle('Items', button('Add', { variant: 'quiet', onclick: () => pickProducts(quote, redrawTotals) })),
+    sectionTitle('Items', button('Add', { variant: 'quiet', onclick: () => pickProducts(quote, onPricingChange) })),
   );
   wrap.appendChild(linesSlot);
 
@@ -166,6 +209,7 @@ function editor(id, navigate) {
   wrap.appendChild(presentationPanel(quote));
 
   redrawTotals();
+  redrawCross();
 
   /* Actions */
   wrap.appendChild(
@@ -516,6 +560,15 @@ function presentationPanel(quote) {
     quote.notes = notes.value;
   });
 
+  const remarks = el(
+    'textarea',
+    { class: 'input', rows: '4', placeholder: 'Sizing run, artwork deadline, what the price assumes…' },
+    quote.remarks || '',
+  );
+  remarks.addEventListener('input', () => {
+    quote.remarks = remarks.value;
+  });
+
   const date = input({ type: 'date', value: quote.date });
   date.addEventListener('change', () => {
     quote.date = date.value;
@@ -537,8 +590,132 @@ function presentationPanel(quote) {
     field('Lead time', lead),
     field('Payment terms', terms),
     field('Notes', notes),
+    field('Additional remarks', remarks, 'Printed in full under the terms'),
     field('Status', status),
   );
+}
+
+
+/* -------------------------------------------------------------- cross-border */
+
+/**
+ * Whether UK VAT belongs on this quotation at all, and what the customer is
+ * actually being promised.
+ *
+ * Three facts decide it and the app cannot infer any of them: where the customer
+ * is, where the goods physically leave from, and which incoterm was quoted. Left
+ * unasked, a quote to a Dublin club goes out as a UK domestic sale with 20% on
+ * it — which is why this sits next to the client rather than in a setting.
+ */
+function crossBorderPanel(quote, { onChange, onApply }) {
+  const { settings } = load();
+  const all = products();
+  const lineProducts = quote.lines.map((l) => all.find((p) => p.id === l.productId)).filter(Boolean);
+
+  // Somewhere the goods can leave from: our own stock, or a factory we use.
+  const origins = [...new Set(lineProducts.map((p) => originCode(p)).filter(Boolean))];
+  const fromOptions = [
+    { value: SELLER_COUNTRY, label: `${country(SELLER_COUNTRY).name} — our stock` },
+    ...origins.map((code) => {
+      const maker = lineProducts.find((p) => originCode(p) === code)?.maker;
+      return { value: code, label: `${country(code)?.name || code}${maker ? ` — direct from ${maker}` : ''}` };
+    }),
+  ];
+  if (quote.shipsFrom && !fromOptions.some((o) => o.value === quote.shipsFrom)) {
+    fromOptions.push({ value: quote.shipsFrom, label: country(quote.shipsFrom)?.name || quote.shipsFrom });
+  }
+
+  const fromSelect = select(fromOptions, { value: quote.shipsFrom || SELLER_COUNTRY });
+  fromSelect.addEventListener('change', () => {
+    quote.shipsFrom = fromSelect.value;
+    onChange();
+  });
+
+  const incotermSelect = select(
+    [{ value: '', label: 'Not stated' }, ...INCOTERMS.map((i) => ({ value: i.code, label: `${i.code} — ${i.name}` }))],
+    { value: quote.incoterm || '' },
+  );
+  incotermSelect.addEventListener('change', () => {
+    quote.incoterm = incotermSelect.value;
+    onChange();
+  });
+
+  const treatment = supplyTreatment({
+    clientCountry: quote.client.country,
+    goodsFrom: quote.shipsFrom || SELLER_COUNTRY,
+    incoterm: quote.incoterm,
+    clientVatNumber: quote.client.vatNumber,
+    domesticRate: settings.vatRate,
+  });
+
+  const warnings = [...treatment.warnings];
+
+  // A product costed to land in one country, quoted to a customer in another.
+  const costedFor = [...new Set(lineProducts.map((p) => p.landedTerms?.destination).filter(Boolean))];
+  costedFor
+    .filter((code) => quote.client.country && code !== quote.client.country)
+    .forEach((code) => {
+      warnings.push(
+        `A line was costed to land in ${country(code)?.name || code}, but this quotation is for ${country(quote.client.country)?.name}. Its duty and freight will not be right.`,
+      );
+    });
+
+  // Costed on cheaper terms than the quote promises: the gap is ours to eat.
+  const costedTerms = [...new Set(lineProducts.map((p) => p.landedTerms?.incoterm).filter(Boolean))];
+  if (quote.incoterm === 'DDP' && costedTerms.length && !costedTerms.includes('DDP')) {
+    warnings.push(
+      `You are quoting DDP but the ${costedTerms.join('/')} costing behind it stops short of duty and import VAT. That difference comes out of this margin.`,
+    );
+  }
+
+  const bits = [
+    el(
+      'div',
+      { class: 'field-grid' },
+      field('Goods ship from', fromSelect, 'Decides if this is a UK export'),
+      field('Incoterm', incotermSelect, 'Printed on the quotation'),
+    ),
+  ];
+
+  const mismatch = Math.abs((quote.vatRate ?? 0) - treatment.rate) > 0.0001;
+  bits.push(
+    el(
+      'p',
+      { class: `inline-note ${mismatch ? 'text-alert' : ''}` },
+      `${treatment.label}. ${treatment.rate ? `UK VAT at ${percent(treatment.rate)}` : 'No UK VAT'} applies` +
+        (mismatch ? `, but this quotation is set to ${percent(quote.vatRate ?? 0)}.` : '.'),
+    ),
+  );
+
+  if (mismatch) {
+    bits.push(
+      el(
+        'div',
+        { class: 'btn-row' },
+        button(treatment.rate ? `Charge VAT at ${percent(treatment.rate)}` : 'Zero-rate this quotation', {
+          onclick: () => {
+            quote.vatRate = treatment.rate;
+            // The wording has to move with the rate, or the PDF contradicts itself.
+            if (treatment.note) quote.vatNote = treatment.note;
+            else if (!treatment.rate) quote.vatNote = '';
+            onApply();
+          },
+        }),
+      ),
+    );
+  }
+
+  warnings.forEach((w) => bits.push(el('p', { class: 'inline-note text-alert' }, `· ${w}`)));
+
+  if (!quote.client.country) {
+    bits.push(el('p', { class: 'inline-note' }, 'Set the client’s country and this works itself out.'));
+  } else {
+    bits.push(
+      el('p', { class: 'inline-note' }, 'A prompt, not advice — anything unusual is worth an accountant’s eye before it goes out.'),
+    );
+  }
+
+  return card(...bits);
 }
 
 /* -------------------------------------------------------------------- sheets */
@@ -550,6 +727,13 @@ function editClient(quote, onDone) {
   const email = input({ type: 'email', value: c.email, autocapitalize: 'off' });
   const phone = input({ type: 'tel', value: c.phone });
   const address = el('textarea', { class: 'input', placeholder: 'One line per line' }, c.address);
+  // The country is not decoration: it decides whether UK VAT belongs on this
+  // quotation at all, so it sits with the address rather than in a setting.
+  const countrySelect = select(
+    [{ value: '', label: '—' }, ...COUNTRIES.map((x) => ({ value: x.code, label: x.name }))],
+    { value: c.country || '' },
+  );
+  const vatNumber = input({ value: c.vatNumber || '', placeholder: 'For a business abroad', autocapitalize: 'characters' });
 
   sheet(
     'Client',
@@ -560,6 +744,7 @@ function editClient(quote, onDone) {
       field('Contact', contact),
       el('div', { class: 'field-grid' }, field('Email', email), field('Phone', phone)),
       field('Address', address),
+      el('div', { class: 'field-grid' }, field('Country', countrySelect, 'Decides the VAT treatment'), field('Their VAT number', vatNumber)),
     ),
     {
       actions: [
@@ -572,6 +757,8 @@ function editClient(quote, onDone) {
               email: email.value.trim(),
               phone: phone.value.trim(),
               address: address.value.trim(),
+              country: countrySelect.value,
+              vatNumber: vatNumber.value.trim(),
             });
             closeSheet();
             onDone();

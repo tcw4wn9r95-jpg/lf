@@ -223,3 +223,97 @@ export function defaultTerms({ product, incoterm: code = DEFAULT_INCOTERM, desti
     at: null,
   };
 }
+
+/* --------------------------------------------------- selling across a border */
+
+/*
+ * What VAT a quotation should actually carry.
+ *
+ * Landed cost is about getting goods to the customer. This is the other half:
+ * whether La Fuga charges UK VAT on the sale at all. Three facts decide it — who
+ * the customer is, where the goods physically travel, and which incoterm was
+ * quoted — and the app gets all three wrong by default if nobody asks.
+ *
+ * The rules below are the ordinary ones for a UK VAT-registered seller of goods.
+ * They are a prompt, not advice: exports turn on holding evidence, DDP can
+ * create obligations abroad, and Northern Ireland has its own regime. Anything
+ * unusual belongs with an accountant before it goes out.
+ */
+export const SELLER_COUNTRY = 'GB';
+
+export function supplyTreatment({
+  clientCountry,
+  goodsFrom = null,
+  incoterm: code = null,
+  clientVatNumber = '',
+  domesticRate = 0.2,
+} = {}) {
+  const to = country(clientCountry);
+  const from = country(goodsFrom);
+  const warnings = [];
+
+  if (!to) {
+    return {
+      rate: domesticRate,
+      kind: 'unknown',
+      label: 'Domestic supply',
+      note: null,
+      warnings: ['No country on the client, so this is being quoted as a UK sale at the standard rate.'],
+    };
+  }
+
+  // Goods that never enter the UK are not a UK export, whatever the invoice says.
+  const neverInUk = from && from.code !== SELLER_COUNTRY && to.code !== SELLER_COUNTRY;
+
+  if (to.code === SELLER_COUNTRY) {
+    if (from && from.code !== SELLER_COUNTRY) {
+      // Imported first, then sold here: ordinary domestic supply once it lands.
+      return {
+        rate: domesticRate,
+        kind: 'domestic',
+        label: 'UK supply',
+        note: null,
+        warnings,
+      };
+    }
+    return { rate: domesticRate, kind: 'domestic', label: 'UK supply', note: null, warnings };
+  }
+
+  if (neverInUk) {
+    warnings.push(
+      `These goods travel ${from.name} to ${to.name} without entering the UK, so this is not a UK export. ` +
+        `The supply falls under ${from.code === to.code ? to.name : `${from.name}/${to.name}`} rules and may need a VAT registration there. Check before sending.`,
+    );
+  }
+
+  if (code === 'DDP') {
+    warnings.push(
+      `Quoting DDP makes you importer of record in ${to.name}. That can oblige you to register for VAT there and reclaim the import VAT locally — confirm it before committing to the price.`,
+    );
+  }
+
+  if (to.bloc === 'EU' && !String(clientVatNumber || '').trim()) {
+    warnings.push(`For a business customer in ${to.name}, their VAT number belongs on the document.`);
+  }
+
+  if (!neverInUk) {
+    warnings.push('Zero-rating an export depends on holding proof the goods left the UK — usually within three months of supply.');
+  }
+
+  // Plain words, not an arrow: this string is printed by the PDF, whose subsetted
+  // typeface has no glyph for one.
+  const note = neverInUk
+    ? `Supplied from ${from.name} to ${to.name}. No UK VAT is charged. Import duty and ${to.vat ? `${to.name} VAT` : 'local taxes'} on arrival are the importer's.`
+    : `Zero-rated export of goods to ${to.name}. No UK VAT is charged. ` +
+      `Import duty and ${to.vat ? `${to.name} VAT at ${(to.vat * 100).toFixed(0)}%` : 'local taxes'} on arrival are payable by the importer of record.`;
+
+  return {
+    rate: 0,
+    kind: neverInUk ? 'outside-scope' : 'export',
+    // Goods that never touch the UK are not a UK export, and saying so would
+    // paper over exactly the thing worth noticing.
+    label: neverInUk ? `Outside UK VAT — ${from.name} to ${to.name}` : `Export to ${to.name}`,
+    note,
+    warnings,
+  };
+}
