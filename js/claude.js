@@ -387,3 +387,75 @@ export function termsFromEstimate(terms, estimate) {
     at: estimate.at || new Date().toISOString(),
   };
 }
+
+/* --------------------------------------------------- checking the answer */
+
+/*
+ * An estimate can be internally inconsistent, and a number that contradicts its
+ * own rate is worse than no number: it looks authoritative and it is quietly
+ * wrong. The model writes a rate, a value and an amount into separate fields,
+ * so those three can be multiplied back together and checked.
+ *
+ * This is not second-guessing the tax research. It is arithmetic.
+ */
+export function checkCustoms(c) {
+  const out = [];
+  if (!c) return out;
+  const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+  const money = (v) => `£${v.toFixed(2)}`;
+
+  const value = n(c.customsValue);
+  const rate = n(c.dutyRate);
+  const duty = n(c.duty);
+  if (value && rate !== null && duty !== null) {
+    const implied = value * rate;
+    // A penny of rounding is fine; a hundred pounds is a different answer.
+    if (Math.abs(implied - duty) > Math.max(5, implied * 0.05)) {
+      out.push({
+        field: 'duty',
+        suggested: Math.round(implied * 100) / 100,
+        message:
+          `The duty and the duty rate disagree. At ${(rate * 100).toFixed(1)}% of ${money(value)} the duty is ` +
+          `${money(implied)}, but ${money(duty)} was returned — a gap of ${money(Math.abs(implied - duty))}. ` +
+          'One of the two is wrong, and the amount is the one being charged.',
+      });
+    }
+  }
+
+  const vatRate = n(c.importVatRate);
+  const vat = n(c.importVat);
+  if (value && vatRate && vat !== null) {
+    const base = value + (duty || 0);
+    const implied = base * vatRate;
+    if (Math.abs(implied - vat) > Math.max(5, implied * 0.05)) {
+      out.push({
+        field: 'importVat',
+        suggested: Math.round(implied * 100) / 100,
+        message:
+          `Import VAT and its rate disagree. At ${(vatRate * 100).toFixed(1)}% of ${money(base)} it is ` +
+          `${money(implied)}, not ${money(vat)}.`,
+      });
+    }
+  }
+
+  return out;
+}
+
+/** The same arithmetic on a shipping quote: the amount against its own weight. */
+export function checkShipping(s) {
+  const out = [];
+  if (!s) return out;
+  if (Number.isFinite(s.chargeableKg) && s.chargeableKg > 0 && Number.isFinite(s.amount)) {
+    const perKg = s.amount / s.chargeableKg;
+    // Express air anywhere in the world lives between these two numbers. Outside
+    // them, something has been misread rather than negotiated.
+    if (perKg > 60 || perKg < 2) {
+      out.push({
+        field: 'amount',
+        suggested: null,
+        message: `That works out at £${perKg.toFixed(2)} a kilo on ${s.chargeableKg} kg chargeable, which is outside anything an express carrier charges. Worth re-reading before you quote it.`,
+      });
+    }
+  }
+  return out;
+}

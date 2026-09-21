@@ -163,6 +163,18 @@ order freight would charge the same freight twice; quoting ex works out of stock
 would forget it. On a 60-jersey club order that is the difference between 53.3%
 and 58.1% margin, and the app says which basis it is using.
 
+**Every estimate is checked against itself.** The model writes a rate, a value
+and an amount into separate fields, so those three get multiplied back together.
+A duty of £449.86 sitting next to a rate of 37.6% on a £2,976 value is not a
+judgement call about tariffs — it is arithmetic, and one of the two numbers is
+wrong. The app says which, by how much, and offers the corrected figure in one
+tap. A shipping amount that works out at an impossible rate per kilo gets the
+same treatment.
+
+Low confidence is surfaced where it matters too: when a shaky figure is a large
+share of what the order would otherwise earn, the panel says so before you quote
+a fixed price on it.
+
 Both estimates land as **editable figures** and drop straight into the
 profitability you already had: £856.70 of shipping and duty takes a 49.2% order to 32.8%. Tick
 **Charge it to the customer** and it becomes one line on the PDF — *Delivery,

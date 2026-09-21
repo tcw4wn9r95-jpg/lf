@@ -138,6 +138,9 @@ export function priceQuote(quote) {
     listGrossSubtotal,
     discountValue: round2(listGrossSubtotal - goodsGross),
     goodsGross,
+    /* The goods alone, before anything charged on for getting them there. This
+       is what a customs declaration is built from, never the order total. */
+    goodsNet,
     grossTotal,
     subtotal: netTotal,
     vat,

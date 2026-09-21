@@ -7,7 +7,7 @@ import {
   COUNTRIES, INCOTERMS, country, supplyTreatment, SELLER_COUNTRY, originCode,
   incoterm, CARRIERS, carrierLabel, shipmentSize,
 } from '../landed.js';
-import { estimateShipping, estimateCustoms } from '../claude.js';
+import { estimateShipping, estimateCustoms, checkCustoms, checkShipping } from '../claude.js';
 import {
   priceQuote, breakEvenDiscount, maxDiscountForMargin, marginVerdict, VERDICT_TONE,
   VAT_PRESETS, PRICE_DISPLAY, suggestedVatNote, costStack, costBasis, COST_BASIS_LABEL,
@@ -767,10 +767,10 @@ function logisticsSheet(quote, onDone) {
       ),
     );
 
+    // A missing key stops new estimates being made. It must not stop the ones
+    // already on the quotation being read, corrected, or argued with.
     if (!key) {
-      bits.push(el('p', { class: 'inline-note text-alert' }, 'Add an Anthropic API key in Settings to work these out.'));
-      body.replaceChildren(...bits);
-      return;
+      bits.push(el('p', { class: 'inline-note' }, 'Add an Anthropic API key in Settings to work these out here. Figures already on this quotation stay editable without one.'));
     }
 
     /* ---- shipping ---- */
@@ -783,18 +783,21 @@ function logisticsSheet(quote, onDone) {
       });
       bits.push(
         field(`${carrierLabel(L.carrier)} — whole shipment`, amount, ship.service || ''),
+        el('p', { class: 'inline-note' }, `${ship.reasoning || ''}${ship.transitDays ? ` Transit ${ship.transitDays}.` : ''}`),
+      );
+      if (ship.chargeableKg) bits.push(el('p', { class: 'inline-note' }, `Chargeable weight ${ship.chargeableKg} kg${ship.surcharges ? ` · ${ship.surcharges}` : ''}`));
+      checkShipping(ship).forEach((w) => bits.push(el('p', { class: 'inline-note text-alert' }, w.message)));
+      (ship.caveats || []).forEach((c) => bits.push(el('p', { class: 'inline-note' }, `· ${c}`)));
+      bits.push(
         el(
           'p',
           { class: `inline-note ${ship.confidence === 'low' ? 'text-alert' : ''}` },
-          `${ship.reasoning || ''}${ship.transitDays ? ` Transit ${ship.transitDays}.` : ''}`,
+          `Estimated by Claude · ${ship.confidence} confidence.`,
         ),
       );
-      if (ship.chargeableKg) bits.push(el('p', { class: 'inline-note' }, `Chargeable weight ${ship.chargeableKg} kg${ship.surcharges ? ` · ${ship.surcharges}` : ''}`));
-      (ship.caveats || []).forEach((c) => bits.push(el('p', { class: 'inline-note' }, `· ${c}`)));
-      bits.push(el('p', { class: 'inline-note' }, `Estimated by Claude · ${ship.confidence} confidence.`));
     }
 
-    bits.push(
+    if (key) bits.push(
       el(
         'div',
         { class: 'btn-row' },
@@ -820,7 +823,7 @@ function logisticsSheet(quote, onDone) {
                   grossKg: L.grossKg,
                   dimensions: L.dimensions,
                   items: shipmentItems(quote, totals, resolve),
-                  declaredValue: totals.subtotal,
+                  declaredValue: totals.goodsNet,
                 },
                 { apiKey: key, model: load().settings.claudeModel },
               );
@@ -862,7 +865,7 @@ function logisticsSheet(quote, onDone) {
         bits.push(
           el('div', { class: 'field-grid' }, money('Duty', 'duty'), money('Import VAT', 'importVat')),
           el('div', { class: 'field-grid' }, money('Clearance', 'brokerage'), money('Other taxes', 'otherTaxes')),
-          el('p', { class: `inline-note ${cus.confidence === 'low' ? 'text-alert' : ''}` }, cus.reasoning || ''),
+          el('p', { class: 'inline-note' }, cus.reasoning || ''),
         );
         if (cus.hsCodes?.length) bits.push(el('p', { class: 'inline-note' }, `Classified ${cus.hsCodes.join(' · ')}`));
         if (cus.customsValue) {
@@ -874,11 +877,34 @@ function logisticsSheet(quote, onDone) {
             ),
           );
         }
+        checkCustoms(cus).forEach((w) => {
+          bits.push(el('p', { class: 'inline-note text-alert' }, w.message));
+          if (w.suggested !== null) {
+            bits.push(
+              el(
+                'div',
+                { class: 'btn-row' },
+                button(`Use ${currency(w.suggested, { code: quote.currency })}`, {
+                  onclick: () => {
+                    cus[w.field] = w.suggested;
+                    draw();
+                  },
+                }),
+              ),
+            );
+          }
+        });
         (cus.caveats || []).forEach((c) => bits.push(el('p', { class: 'inline-note' }, `· ${c}`)));
-        bits.push(el('p', { class: 'inline-note' }, `Estimated by Claude · ${cus.confidence} confidence. A broker signs off the entry, not this.`));
+        bits.push(
+          el(
+            'p',
+            { class: `inline-note ${cus.confidence === 'low' ? 'text-alert' : ''}` },
+            `Estimated by Claude · ${cus.confidence} confidence. A broker signs off the entry, not this.`,
+          ),
+        );
       }
 
-      bits.push(
+      if (key) bits.push(
         el(
           'div',
           { class: 'btn-row' },
@@ -899,7 +925,7 @@ function logisticsSheet(quote, onDone) {
                     incotermSummary: quote.incoterm ? incoterm(quote.incoterm).summary : '',
                     currency: quote.currency,
                     items: shipmentItems(quote, totals, resolve),
-                    declaredValue: totals.subtotal,
+                    declaredValue: totals.goodsNet,
                     freight: L.shipping?.amount || null,
                     insurance: null,
                     grossKg: L.grossKg,
@@ -952,6 +978,19 @@ function logisticsSheet(quote, onDone) {
           L.chargeAmount = amount.value === '' ? null : parseFloat(amount.value) || 0;
         });
         bits.push(field('Charge, excl. VAT', amount, 'Appears on the PDF as a line'));
+      }
+
+      const shaky = [L.shipping?.confidence, L.customs?.confidence].filter((c) => c === 'low').length;
+      if (shaky && after.logisticsCost > after.profit * 0.25) {
+        bits.push(
+          el(
+            'p',
+            { class: 'inline-note text-alert' },
+            `${shaky === 2 ? 'Both figures are' : 'One of these figures is'} low confidence, and together they are ` +
+              `${percent(after.logisticsCost / (after.profit + after.logisticsCost), 0)} of what this order would otherwise earn. ` +
+              'Read the caveats before quoting a fixed price on them.',
+          ),
+        );
       }
 
       bits.push(
