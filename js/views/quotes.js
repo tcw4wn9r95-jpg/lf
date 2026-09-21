@@ -613,17 +613,33 @@ function crossBorderPanel(quote, { onChange, onApply }) {
   const lineProducts = quote.lines.map((l) => all.find((p) => p.id === l.productId)).filter(Boolean);
 
   // Somewhere the goods can leave from: our own stock, or a factory we use.
-  const origins = [...new Set(lineProducts.map((p) => originCode(p)).filter(Boolean))];
+  // Built from the whole catalogue, not from this quote's lines — the panel sits
+  // above Items, so deriving it from the lines left a select with one option on
+  // every new quotation.
+  const makersByCountry = new Map();
+  all.forEach((p) => {
+    const code = originCode(p);
+    if (!code || !p.maker) return;
+    if (!makersByCountry.has(code)) makersByCountry.set(code, new Set());
+    makersByCountry.get(code).add(p.maker);
+  });
+
+  const factoryOptions = [...makersByCountry.entries()]
+    .map(([code, makers]) => ({
+      value: code,
+      label: `${country(code)?.name || code} — direct from ${[...makers].sort().join(' / ')}`,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+
   const fromOptions = [
     { value: SELLER_COUNTRY, label: `${country(SELLER_COUNTRY).name} — our stock` },
-    ...origins.map((code) => {
-      const maker = lineProducts.find((p) => originCode(p) === code)?.maker;
-      return { value: code, label: `${country(code)?.name || code}${maker ? ` — direct from ${maker}` : ''}` };
-    }),
+    ...factoryOptions,
+    // Anything else is unusual but not impossible — a third-party maker, or
+    // stock already sitting with a distributor abroad.
+    ...COUNTRIES.filter(
+      (c) => c.code !== SELLER_COUNTRY && !makersByCountry.has(c.code),
+    ).map((c) => ({ value: c.code, label: c.name })),
   ];
-  if (quote.shipsFrom && !fromOptions.some((o) => o.value === quote.shipsFrom)) {
-    fromOptions.push({ value: quote.shipsFrom, label: country(quote.shipsFrom)?.name || quote.shipsFrom });
-  }
 
   const fromSelect = select(fromOptions, { value: quote.shipsFrom || SELLER_COUNTRY });
   fromSelect.addEventListener('change', () => {
@@ -672,7 +688,7 @@ function crossBorderPanel(quote, { onChange, onApply }) {
     el(
       'div',
       { class: 'field-grid' },
-      field('Goods ship from', fromSelect, 'Decides if this is a UK export'),
+      field('Goods ship from', fromSelect, 'Our stock, or straight off the factory floor'),
       field('Incoterm', incotermSelect, 'Printed on the quotation'),
     ),
   ];
