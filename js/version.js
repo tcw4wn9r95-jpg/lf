@@ -3,4 +3,4 @@
  * without guessing, and kept in step with the service worker's cache name by
  * scripts/release.sh — they must never drift, or a deploy goes invisible.
  */
-export const APP_VERSION = '2026.09.21-4';
+export const APP_VERSION = '2026.09.21-5';

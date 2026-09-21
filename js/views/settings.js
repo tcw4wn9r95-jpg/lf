@@ -6,7 +6,7 @@ import { APP_VERSION } from '../version.js';
 import { PROFILE_DEFAULTS, profile } from '../deadlines.js';
 import { syncNow, parseFigures, applyFigures, syncUrlIsUsable, looksPublished, figuresTemplateCsv } from '../sync.js';
 import { PRICE_DISPLAY, suggestedVatNote } from '../pricing.js';
-import { INCOTERMS, COUNTRIES, DEFAULT_INCOTERM, DEFAULT_DESTINATION } from '../landed.js';
+import { INCOTERMS } from '../landed.js';
 import { CLAUDE_MODELS, DEFAULT_MODEL } from '../claude.js';
 import {
   el, card, sectionTitle, button, input, select, field, sheet, closeSheet, toast,
@@ -34,7 +34,7 @@ export default function settingsView({ navigate }) {
   wrap.appendChild(sectionTitle('Pricing defaults'));
   wrap.appendChild(defaultsPanel(data));
 
-  wrap.appendChild(sectionTitle('Made-to-order'));
+  wrap.appendChild(sectionTitle('Quotations & Claude'));
   wrap.appendChild(customPanel(data));
 
   wrap.appendChild(sectionTitle('Unit economics'));
@@ -383,23 +383,22 @@ function customPanel(data) {
       'div',
       { class: 'field-grid' },
       field(
-        'Incoterm',
-        bind(select(INCOTERMS.map((i) => ({ value: i.code, label: i.code })), { value: s.customIncoterm || DEFAULT_INCOTERM }), (set, v) => {
-          set.customIncoterm = v;
-        }),
-        'Custom jobs start here',
-      ),
-      field(
-        'Customer in',
-        bind(select(COUNTRIES.map((c) => ({ value: c.code, label: c.name })), { value: s.customDestination || DEFAULT_DESTINATION }), (set, v) => {
-          set.customDestination = v;
-        }),
+        'Default incoterm',
+        bind(
+          select([{ value: '', label: 'Not stated' }, ...INCOTERMS.map((i) => ({ value: i.code, label: i.code }))], {
+            value: s.customIncoterm || '',
+          }),
+          (set, v) => {
+            set.customIncoterm = v;
+          },
+        ),
+        'New quotations start here',
       ),
     ),
     el(
       'p',
       { class: 'prose' },
-      'A made-to-order run does not inherit the catalogue’s import costs. Pick the terms you are quoting on and the app works out what is yours to pay.',
+      'Products are costed at the factory door. What it takes to get an order to a customer — the freight, the duty, the clearance — is worked out on the quotation itself, where the destination and the real weight are known.',
     ),
     field('Anthropic API key', keyInput, 'Stored on this phone only, and left out of backups'),
     field(

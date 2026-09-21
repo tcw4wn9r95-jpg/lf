@@ -64,9 +64,9 @@ export const DEFAULTS = Object.freeze({
        never in the repository and never in an export shared with anyone. */
     claudeApiKey: '',
     claudeModel: 'claude-opus-5',
-    /* What a made-to-order job defaults to before anyone touches it. */
-    customIncoterm: 'FOB',
-    customDestination: 'GB',
+    /* The incoterm new quotations start on. Empty on purpose: it prints on the
+       PDF as a contractual term, and one nobody chose should never appear. */
+    customIncoterm: '',
     /* Figures sync. The link lives here, on the phone — never in the repository. */
     syncUrl: '',
     syncAuto: false,

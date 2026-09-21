@@ -10,7 +10,7 @@ import {
 import { estimateShipping, estimateCustoms } from '../claude.js';
 import {
   priceQuote, breakEvenDiscount, maxDiscountForMargin, marginVerdict, VERDICT_TONE,
-  VAT_PRESETS, PRICE_DISPLAY, suggestedVatNote,
+  VAT_PRESETS, PRICE_DISPLAY, suggestedVatNote, costStack, costBasis, COST_BASIS_LABEL,
 } from '../pricing.js';
 import { buildQuotePdf, quoteFilename } from '../pdf.js';
 import { loadBrandFonts } from '../fonts.js';
@@ -96,7 +96,7 @@ function blankQuote() {
     /* Where the goods physically leave from, which decides whether this is a UK
        export at all: our own stock, or straight off the factory floor. */
     shipsFrom: SELLER_COUNTRY,
-    incoterm: '',
+    incoterm: settings.customIncoterm || '',
     remarks: '',
     /* What it costs to get the order there and through customs. Order-level,
        so it lives here rather than being smeared across the lines. */
@@ -146,7 +146,13 @@ function editor(id, navigate) {
   const redrawCross = () => {
     crossSlot.replaceChildren(
       crossBorderPanel(quote, {
-        onChange: () => redrawCross(),
+        onChange: () => {
+          // Where the goods leave from decides which cost the lines carry, so
+          // this is not just a note changing.
+          redrawCross();
+          redrawTotals();
+          if (typeof drawLogistics === 'function') drawLogistics();
+        },
         onApply: () => {
           pricingSlot.replaceChildren(pricingPanel(quote, onPricingChange));
           redrawCross();
@@ -698,6 +704,7 @@ function logisticsSheet(quote, onDone) {
   if (!Number.isFinite(L.cartons)) L.cartons = size.cartons;
 
   const body = el('div');
+  let lastError = null;
   const draw = () => {
     const bits = [];
     const key = load().settings.claudeApiKey;
@@ -737,7 +744,13 @@ function logisticsSheet(quote, onDone) {
       L.dimensions = dims.value;
     });
 
+    const basis = costBasis(quote);
     bits.push(
+      el(
+        'p',
+        { class: 'inline-note' },
+        `Lines are costed ${basis === 'exw' ? 'ex works' : 'landed'}: ${COST_BASIS_LABEL[basis]}.`,
+      ),
       el('div', { class: 'field-grid' }, field('Carrier', carrier), field('Cartons', cartons)),
       el(
         'div',
@@ -814,9 +827,9 @@ function logisticsSheet(quote, onDone) {
               draw();
               toast('Shipping in. The figure is editable.');
             } catch (err) {
-              toast(err.message || 'That did not work.', 'alert');
-              btn.disabled = false;
-              btn.textContent = ship ? 'Price it again' : 'Calculate shipping';
+              lastError = err.message || 'That did not work.';
+              toast(lastError, 'alert');
+              draw();
             }
           },
         }),
@@ -897,9 +910,9 @@ function logisticsSheet(quote, onDone) {
                 draw();
                 toast('Import costs in. Every figure is editable.');
               } catch (err) {
-                toast(err.message || 'That did not work.', 'alert');
-                btn.disabled = false;
-                btn.textContent = cus ? 'Work it out again' : 'Calculate import costs';
+                lastError = err.message || 'That did not work.';
+                toast(lastError, 'alert');
+                draw();
               }
             },
           }),
@@ -951,6 +964,8 @@ function logisticsSheet(quote, onDone) {
       );
     }
 
+    // Kept on screen rather than left to a toast, so it can be read back.
+    if (lastError) bits.push(el('p', { class: 'inline-note text-alert' }, lastError));
     body.replaceChildren(...bits);
   };
 
@@ -1254,6 +1269,9 @@ function addLine(quote, p) {
     existing.qty += 1;
     return;
   }
+  // Both costs travel with the line, because which one applies is a property of
+  // the quotation and can change after the line is added.
+  const stack = costStack(p, { reclaimImportVat: load().settings.reclaimImportVat });
   quote.lines.push({
     id: uid('ln'),
     productId: p.id,
@@ -1262,7 +1280,9 @@ function addLine(quote, p) {
     // a customer's quotation.
     code: p.code || '',
     qty: 1,
-    cost: p.cost ?? 0,
+    exw: stack.exw,
+    landed: stack.landed,
+    cost: p.cost ?? stack.landed,
     rrp: p.rrp ?? 0,
     discount: 0,
   });

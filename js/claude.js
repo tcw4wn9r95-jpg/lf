@@ -31,40 +31,56 @@ export const CLAUDE_MODELS = [
 
 export const DEFAULT_MODEL = 'claude-opus-5';
 
+/*
+ * Strict tool use validates the model's arguments against the schema exactly,
+ * which is what makes the numbers here safe to read without second-guessing
+ * them. The price of it is that every property has to appear in `required` —
+ * a field you simply leave out is a schema error, not an optional field. So
+ * optional answers are declared nullable and asked for explicitly.
+ */
+function strictSchema(properties) {
+  return {
+    type: 'object',
+    properties,
+    required: Object.keys(properties),
+    additionalProperties: false,
+  };
+}
+
+/** An answer the model may genuinely not have. Null, never absent. */
+function maybe(type, description, extra = {}) {
+  return { type: [type, 'null'], description: `${description} Null if you cannot say.`, ...extra };
+}
+
 /* The shape we want back. Declared as a tool so the model fills fields rather
    than writing prose we then have to pick apart. */
 const ESTIMATE_TOOL = {
   name: 'record_landed_estimate',
   description: 'Record the per-unit import costs for this shipment of cycling apparel.',
-  input_schema: {
-    type: 'object',
-    properties: {
-      hsCode: { type: 'string', description: 'Most likely HS/commodity code, 6 or 8 digits, e.g. "6112.20".' },
-      hsReason: { type: 'string', description: 'One sentence on why that code and not a neighbouring one.' },
-      dutyRate: {
-        type: 'number',
-        description: 'Ad valorem duty as a decimal fraction (0.12 for 12%). Use 0 where a trade agreement or the destination genuinely charges nothing.',
-      },
-      dutyBasis: { type: 'string', enum: ['cif', 'fob'], description: 'What the destination levies duty on.' },
-      importVatRate: {
-        type: 'number',
-        description: 'Import VAT/GST as a decimal fraction, charged on customs value plus duty. 0 where none is charged at import.',
-      },
-      insuranceRate: { type: 'number', description: 'Cargo insurance as a decimal fraction of goods value. Typically 0.002–0.01.' },
-      freightIn: { type: 'number', description: 'Per-unit freight from the factory to the destination country, in the quote currency.' },
-      freightOut: { type: 'number', description: 'Per-unit onward delivery inside the destination country, in the quote currency. 0 if the incoterm stops at the port.' },
-      brokerage: { type: 'number', description: 'Per-unit customs clearance and handling, in the quote currency. 0 if none applies.' },
-      confidence: { type: 'string', enum: ['high', 'medium', 'low'], description: 'How sure you are. Low is a fine answer.' },
-      reasoning: { type: 'string', description: 'Two or three sentences a freight agent would recognise: the classification, the trade treatment, and how the freight was sized.' },
-      caveats: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'Things that would change the answer — rules of origin evidence, de minimis thresholds, weight-based tariffs, anything worth checking before quoting.',
-      },
+  input_schema: strictSchema({
+    dutyRate: {
+      type: 'number',
+      description: 'Ad valorem duty as a decimal fraction (0.12 for 12%). Use 0 where a trade agreement or the destination genuinely charges nothing.',
     },
-    required: ['dutyRate', 'importVatRate', 'freightIn', 'confidence', 'reasoning'],
-    additionalProperties: false,
-  },
+    importVatRate: {
+      type: 'number',
+      description: 'Import VAT/GST as a decimal fraction, charged on customs value plus duty. 0 where none is charged at import.',
+    },
+    freightIn: { type: 'number', description: 'Per-unit freight from the factory to the destination country, in the quote currency.' },
+    confidence: { type: 'string', enum: ['high', 'medium', 'low'], description: 'How sure you are. Low is a fine answer.' },
+    reasoning: { type: 'string', description: 'Two or three sentences a freight agent would recognise: the classification, the trade treatment, and how the freight was sized.' },
+    dutyBasis: maybe('string', 'What the destination levies duty on.', { enum: ['cif', 'fob', null] }),
+    insuranceRate: maybe('number', 'Cargo insurance as a decimal fraction of goods value, typically 0.002-0.01.'),
+    freightOut: maybe('number', 'Per-unit onward delivery inside the destination country. 0 if the incoterm stops at the port.'),
+    brokerage: maybe('number', 'Per-unit customs clearance and handling. 0 if none applies.'),
+    hsCode: maybe('string', 'Most likely HS/commodity code, 6 or 8 digits, e.g. "6112.20".'),
+    hsReason: maybe('string', 'One sentence on why that code and not a neighbouring one.'),
+    caveats: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Things that would change the answer — rules of origin evidence, de minimis thresholds, weight-based tariffs. Empty array if none.',
+    },
+  }),
   strict: true,
 };
 
@@ -123,7 +139,7 @@ function brief(job) {
 async function ask({ apiKey, model, system, tool, prompt, signal }) {
   if (!apiKey) throw new Error('No API key set. Settings → Claude assist.');
 
-  const send = (withFallback) => {
+  const send = ({ fallback = true, strict = true } = {}) => {
     const headers = {
       'content-type': 'application/json',
       'x-api-key': apiKey,
@@ -136,25 +152,36 @@ async function ask({ apiKey, model, system, tool, prompt, signal }) {
       model,
       max_tokens: 16000,
       system,
-      tools: [tool],
+      tools: [strict ? tool : { name: tool.name, description: tool.description, input_schema: tool.input_schema }],
       tool_choice: { type: 'tool', name: tool.name },
       messages: [{ role: 'user', content: prompt }],
     };
-    if (withFallback) {
+    if (fallback) {
       headers['anthropic-beta'] = FALLBACK_BETA;
       body.fallbacks = 'default';
     }
     return fetch(ENDPOINT, { method: 'POST', headers, signal, body: JSON.stringify(body) });
   };
 
+  // Two things can be refused without the request itself being wrong: an account
+  // that does not carry the fallback beta, and a stricter reading of strict
+  // schemas than this one. Neither is worth failing a freight estimate over, so
+  // each is dropped once and the call retried.
   let res;
   try {
-    res = await send(true);
+    res = await send();
     if (res.status === 400) {
       const text = await res.clone().text();
-      // The account may not carry the fallback beta. That is not a reason to
-      // fail — ask again plainly.
-      if (/beta|fallback/i.test(text)) res = await send(false);
+      if (/beta|fallback/i.test(text)) res = await send({ fallback: false });
+      else if (/strict|schema|required|additionalProperties|input_schema/i.test(text)) {
+        res = await send({ strict: false });
+      }
+    }
+    if (res.status === 400) {
+      const text = await res.clone().text();
+      if (/strict|schema|required|additionalProperties|input_schema/i.test(text)) {
+        res = await send({ fallback: false, strict: false });
+      }
     }
   } catch (err) {
     if (err?.name === 'AbortError') throw err;
@@ -172,7 +199,9 @@ async function ask({ apiKey, model, system, tool, prompt, signal }) {
     if (res.status === 401) throw new Error('That API key was rejected.');
     if (res.status === 429) throw new Error('Rate limited — try again in a moment.');
     if (res.status === 400 && /credit|balance/i.test(detail)) throw new Error('The API account is out of credit.');
-    throw new Error(detail || `Anthropic returned ${res.status}.`);
+    // Anthropic's own words, verbatim. A paraphrase here is a bug that cannot
+    // be diagnosed from the phone it happened on.
+    throw new Error(detail ? `Anthropic: ${detail}` : `Anthropic returned ${res.status}.`);
   }
 
   const body = await res.json();
@@ -204,25 +233,23 @@ export async function estimateLanded(job, { apiKey, model = DEFAULT_MODEL, signa
 const SHIPPING_TOOL = {
   name: 'record_shipping_quote',
   description: 'Record what this carrier will charge to move this shipment.',
-  input_schema: {
-    type: 'object',
-    properties: {
-      amount: { type: 'number', description: 'Total cost of the shipment in the quote currency, excluding VAT.' },
-      service: { type: 'string', description: 'The service level priced, e.g. "International Priority" or "Economy Select".' },
-      chargeableKg: { type: 'number', description: 'The chargeable weight the carrier would bill — the greater of actual and volumetric.' },
-      transitDays: { type: 'string', description: 'Door-to-door transit, e.g. "2-3 working days".' },
-      surcharges: { type: 'string', description: 'Named surcharges folded into the amount — fuel, remote area, residential, peak.' },
-      confidence: { type: 'string', enum: ['high', 'medium', 'low'], description: 'How sure you are. Low is a fine answer.' },
-      reasoning: { type: 'string', description: 'Two or three sentences: the service, how the chargeable weight was arrived at, and what drives the price on this lane.' },
-      caveats: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'What would move the number — account discounts, dimensions you had to assume, residential delivery, dangerous goods.',
-      },
+  input_schema: strictSchema({
+    amount: { type: 'number', description: 'Total cost of the shipment in the quote currency, excluding VAT.' },
+    confidence: { type: 'string', enum: ['high', 'medium', 'low'], description: 'How sure you are. Low is a fine answer.' },
+    reasoning: {
+      type: 'string',
+      description: 'Two or three sentences: the service, how the chargeable weight was arrived at, and what drives the price on this lane.',
     },
-    required: ['amount', 'confidence', 'reasoning'],
-    additionalProperties: false,
-  },
+    service: maybe('string', 'The service level priced, e.g. "International Priority".'),
+    chargeableKg: maybe('number', 'The chargeable weight the carrier would bill — the greater of actual and volumetric.'),
+    transitDays: maybe('string', 'Door-to-door transit, e.g. "2-3 working days".'),
+    surcharges: maybe('string', 'Named surcharges folded into the amount — fuel, remote area, residential, peak.'),
+    caveats: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'What would move the number — account discounts, dimensions you assumed, residential delivery. Empty array if none.',
+    },
+  }),
   strict: true,
 };
 
@@ -270,33 +297,31 @@ export async function estimateShipping(job, { apiKey, model = DEFAULT_MODEL, sig
 const CUSTOMS_TOOL = {
   name: 'record_customs_estimate',
   description: 'Record the duty, import taxes and clearance charges on this shipment.',
-  input_schema: {
-    type: 'object',
-    properties: {
-      duty: { type: 'number', description: 'Total customs duty on the whole shipment, in the quote currency.' },
-      importVat: { type: 'number', description: 'Total import VAT or GST on the whole shipment. 0 where none is charged at import.' },
-      otherTaxes: { type: 'number', description: 'Any other tax on entry — excise, provincial tax, merchandise processing. 0 if none.' },
-      brokerage: { type: 'number', description: 'Customs clearance, entry preparation, disbursement and handling fees for the shipment.' },
-      dutyRate: { type: 'number', description: 'The effective ad valorem duty rate applied, as a decimal fraction.' },
-      importVatRate: { type: 'number', description: 'The import VAT/GST rate applied, as a decimal fraction.' },
-      customsValue: { type: 'number', description: 'The value duty was calculated on, in the quote currency.' },
-      valuationBasis: { type: 'string', enum: ['cif', 'fob'], description: 'What the destination levies duty on.' },
-      hsCodes: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'The commodity codes used, one per distinct garment type, as "6110.30 — long sleeve jersey".',
-      },
-      confidence: { type: 'string', enum: ['high', 'medium', 'low'], description: 'How sure you are. Low is a fine answer.' },
-      reasoning: { type: 'string', description: 'Two or three sentences: the classification, the trade treatment between origin and destination, and how the customs value was built.' },
-      caveats: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'What would change it — rules of origin evidence, de minimis, fibre composition, whether the buyer can reclaim the import VAT.',
-      },
+  input_schema: strictSchema({
+    duty: { type: 'number', description: 'Total customs duty on the whole shipment, in the quote currency.' },
+    importVat: { type: 'number', description: 'Total import VAT or GST on the whole shipment. 0 where none is charged at import.' },
+    brokerage: { type: 'number', description: 'Customs clearance, entry preparation, disbursement and handling fees for the shipment.' },
+    confidence: { type: 'string', enum: ['high', 'medium', 'low'], description: 'How sure you are. Low is a fine answer.' },
+    reasoning: {
+      type: 'string',
+      description: 'Two or three sentences: the classification, the trade treatment between origin and destination, and how the customs value was built.',
     },
-    required: ['duty', 'importVat', 'brokerage', 'confidence', 'reasoning'],
-    additionalProperties: false,
-  },
+    otherTaxes: maybe('number', 'Any other tax on entry — excise, provincial tax, merchandise processing. 0 if none.'),
+    dutyRate: maybe('number', 'The effective ad valorem duty rate applied, as a decimal fraction.'),
+    importVatRate: maybe('number', 'The import VAT/GST rate applied, as a decimal fraction.'),
+    customsValue: maybe('number', 'The value duty was calculated on, in the quote currency.'),
+    valuationBasis: maybe('string', 'What the destination levies duty on.', { enum: ['cif', 'fob', null] }),
+    hsCodes: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'The commodity codes used, one per distinct garment type, as "6110.30 — long sleeve jersey". Empty array if you cannot classify.',
+    },
+    caveats: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'What would change it — rules of origin evidence, de minimis, fibre composition, whether the buyer reclaims the import VAT. Empty array if none.',
+    },
+  }),
   strict: true,
 };
 

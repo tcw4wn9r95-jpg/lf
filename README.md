@@ -101,43 +101,28 @@ workflow on top of the sheet and puts the finished garment straight on the
 quotation the moment you save — no trip to Products and back to find what you
 just made. Either way it is one product, in one place, priced the same way.
 
-Those extras are **made at the factory**, so they go inside the FOB value the
-customs declaration is based on, and insurance, duty and import VAT all rise with
-them. £10.50 of customisation on a Chinese-made bib adds £14.38 landed, not
-£10.50. The builder says so in as many words.
-
-**A made-to-order run does not inherit the catalogue's import costs.** Pick the
-incoterm you are quoting on and where the customer is, and the app works out what
-is actually yours to pay. It defaults to FOB — goods leave the factory and the
-club's forwarder takes them from there — so nothing lands in your cost until you
-say it should. Lines the buyer carries are still shown, struck through, because
-knowing what you handed over is half of knowing whether the incoterm was right.
+Those extras are **made at the factory**, so they are part of what leaves its
+door. A product is priced **ex works** — manufacture, packaging, and whatever
+this job adds — and nothing else:
 
 ```
 Manufacture                              £32.83
 Packaging                                 £0.15
 Full sublimation artwork                  £4.50
 Elastic Interface pad upgrade             £6.00
-FOB — declared value                     £43.48
-Transport Spain → Ireland                 £2.08
-Delivery within Ireland                   £1.00
-Insurance                                 £2.19
-Duty                                      £0.00
-Import VAT                                £0.00
-Import costs                              £5.27
-Unit cost — DDP Ireland                  £49.05
-Markup at 150%                           £73.95
-Sale price excl. VAT                    £123.00
-VAT at 20%                               £24.60
-Sale price incl. VAT                    £147.60
+Unit cost — ex works                     £43.48
+Markup at 150%                           £65.52
+Sale price excl. VAT                    £109.00
+VAT at 20%                               £21.80
+Sale price incl. VAT                    £130.80
 ```
 
-The rules it knows are the ones worth knowing: goods inside the EU cross no
-border, the UK–EU agreement zero-rates the duty *only* on proof the garment
-originates where it ships from, and everything else pays the destination's rate.
-Where a single number cannot be right — US apparel runs 0–32% on fibre and
-construction, Switzerland charges by the kilo — it says the rate is unknown and
-refuses to count it rather than quietly borrowing one.
+**Where it is going is not a property of the product.** A jersey does not know
+whether it is bound for Dublin or Denver, and you cannot weigh an order until
+you know what is in it. So the incoterm, the destination, the freight and the
+duty all belong to the quotation — see below — and the product screen keeps the
+full landed stack as what it has always been: the reference for what it costs to
+bring one into the UK the way this business normally does.
 
 ### Shipping and customs on a quotation
 Once the products are on a quote, **Shipping & customs** works out what the order
@@ -163,8 +148,17 @@ commodity codes and the customs value it worked from. It reads the origin off
 the products, so a Chinese-made jersey shipped out of an EU warehouse gets no
 EU preference, which is the trap worth catching.
 
-Both land as **editable figures** and drop straight into the profitability you
-already had: £856.70 of shipping and duty takes a 49.2% order to 32.8%. Tick
+**Which cost the lines carry follows where the goods leave from.** Out of your
+own stock they have already been brought in and cleared, so the line carries the
+landed cost and the order only pays for the leg out. Straight from the factory
+nothing has been spent on them yet, so the line is ex works and the whole journey
+is priced once, here, on the real weight. Quoting a landed cost *and* adding
+order freight would charge the same freight twice; quoting ex works out of stock
+would forget it. On a 60-jersey club order that is the difference between 53.3%
+and 58.1% margin, and the app says which basis it is using.
+
+Both estimates land as **editable figures** and drop straight into the
+profitability you already had: £856.70 of shipping and duty takes a 49.2% order to 32.8%. Tick
 **Charge it to the customer** and it becomes one line on the PDF — *Delivery,
 duties and clearance* — with the margin recomputed against the larger total.
 The customer sees that line and its price. None of the rates, codes, carriers or
@@ -182,9 +176,7 @@ key lives in this phone's storage, goes straight to Anthropic (there is no serve
 here to hide it behind), and is deliberately **left out of backups**. Use one with
 a spend limit you can revoke.
 
-Saved, a custom product lands under **Custom** and quotes like anything else,
-with the terms it was costed under stored alongside, so reopening it in six
-months still adds up the same way. **The quotation shows only the price** — name,
+Saved, a custom product lands under **Custom** and quotes like anything else. **The quotation shows only the price** — name,
 reference, quantity, unit, amount. None of the breakdown, and not the factory's
 name, reaches the customer.
 
