@@ -106,6 +106,8 @@ export const COUNTRIES = [
     note: 'US apparel duty runs 0–32% on fibre and construction. Sales tax is the buyer’s, not an import charge.' },
   { code: 'CA', name: 'Canada', vat: 0.05, duty: 0.18, bloc: 'CA', sure: false,
     note: 'GST only; provincial tax is charged on top and varies.' },
+  { code: 'SV', name: 'El Salvador', vat: 0.13, duty: 0.15, bloc: 'CACM', sure: false,
+    note: 'Central American common external tariff on garments. The UK–Central America agreement can zero-rate it, but only on proof the garment originates in the UK — Chinese-made stock shipped from here does not qualify. IVA at 13% is charged on the landed value.' },
   { code: 'AU', name: 'Australia', vat: 0.1, duty: 0.05, bloc: 'AU', sure: true },
   { code: 'NZ', name: 'New Zealand', vat: 0.15, duty: 0, bloc: 'NZ', sure: false },
   { code: 'JP', name: 'Japan', vat: 0.1, duty: 0.09, bloc: 'JP', sure: false },
